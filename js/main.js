@@ -36,10 +36,19 @@ scene.add(ocean.mesh);
 const effects = new Effects(scene, 3000);
 const scenery = createScenery(scene, effects);
 
-// ---------- CrazyGames SDK (optional; absent when running locally) ----------
-const sdkReady = (async () => {
-  try { await window.CrazyGames?.SDK?.init?.(); return true; } catch { return false; }
-})();
+// ---------- CrazyGames SDK ----------
+// Loaded in the background so the game never waits on a third-party server; calls made before it
+// arrives are queued in order. If it fails to load (offline, blocked), the game runs without it.
+const sdkReady = new Promise((resolve) => {
+  const script = document.createElement('script');
+  script.src = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
+  script.async = true;
+  script.onload = async () => {
+    try { await window.CrazyGames.SDK.init(); resolve(true); } catch { resolve(false); }
+  };
+  script.onerror = () => resolve(false);
+  document.head.appendChild(script);
+});
 function sdk(fn) {
   sdkReady.then((ok) => { if (ok) try { window.CrazyGames.SDK.game[fn]?.(); } catch { /* not available */ } });
 }
