@@ -67,6 +67,11 @@ function setHealthBar(bar, frac) {
   fg.material.color.set(frac > 0.6 ? 0x4cd68a : frac > 0.3 ? 0xf0b429 : 0xff5a4f);
 }
 
+// One of each projectile, so the loading screen can compile their shaders before the first shot.
+export function warmupMeshes() {
+  return [new THREE.Mesh(shellGeo, shellMat), new THREE.Mesh(torpGeo, torpMat)];
+}
+
 export class Game {
   /**
    * hooks: { toast(text, color), onGameOver(winner) }. In demo mode both fleets are AI-controlled and silent.
@@ -522,7 +527,7 @@ export class Game {
         const z = p.from.z + (p.to.z - p.from.z) * k;
         const y = p.from.y * (1 - k) + 4 * p.arc * k * (1 - k);
         p.mesh.position.set(x, y, z);
-        p.trailAcc += dt * 40;
+        p.trailAcc += dt * 24;
         while (p.trailAcc >= 1) {
           p.trailAcc--;
           fx.emit(x, y, z, 0, 0.3, 0, { life: 0.5, size0: 0.9, size1: 0.2, alpha: 0.6, color: [1, 0.8, 0.5] });
@@ -825,17 +830,17 @@ export class Game {
     const churn = Math.min(1, u.speed / 4);
     const half = s.size / 2;
     const beam = s.size / 8;
-    u.wakeAcc += dt * (s.stealth ? 20 : 12 + s.size) * churn;
+    u.wakeAcc += dt * (s.stealth ? 12 : 8 + s.size * 0.6) * churn;
     while (u.wakeAcc >= 1) {
       u.wakeAcc--;
       const off = (Math.random() - 0.5) * beam;
       const spread = (Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 1.2);
       fx.emit(u.x - fwd.x * half * 0.95 + side.x * off, 0, u.z - fwd.z * half * 0.95 + side.z * off,
         side.x * spread - fwd.x * 0.6, 0, side.z * spread - fwd.z * 0.6,
-        { life: 6, size0: beam * 0.8, size1: beam * 3, alpha: s.stealth ? 0.35 : 0.55, flags: Effects.FLOAT });
+        { life: 6, size0: beam, size1: beam * 3.6, alpha: s.stealth ? 0.35 : 0.55, flags: Effects.FLOAT });
     }
     if (s.stealth) return;
-    u.sprayAcc += dt * 25 * churn;
+    u.sprayAcc += dt * 16 * churn;
     while (u.sprayAcc >= 1) {
       u.sprayAcc--;
       const sgn = Math.random() < 0.5 ? -1 : 1;

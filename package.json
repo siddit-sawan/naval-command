@@ -1,13 +1,14 @@
 {
   "name": "naval-command",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Naval real-time strategy game built with three.js",
   "directories": {
     "lib": "lib"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "npx http-server . -p 8080 -c-1",
+    "build": "node build.mjs",
+    "serve": "npx http-server dist -p 8082 -c-1"
   },
   "keywords": [],
   "author": "",
@@ -15,5 +16,8 @@
   "type": "commonjs",
   "dependencies": {
     "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

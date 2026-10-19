@@ -86,6 +86,7 @@ export class Effects {
   emit(x, y, z, vx, vy, vz, { life = 1, size0 = 1, size1 = size0, alpha = 1, color = 1, flags = 0 } = {}) {
     if (this.count >= this.max) return;
     const i = this.count++;
+    this.colorsDirty = true;
     const i3 = i * 3;
     this.pos[i3] = x; this.pos[i3 + 1] = y; this.pos[i3 + 2] = z;
     this.vel[i3] = vx; this.vel[i3 + 1] = vy; this.vel[i3 + 2] = vz;
@@ -165,7 +166,12 @@ export class Effects {
     }
     const geo = this.points.geometry;
     geo.setDrawRange(0, this.count);
-    this.posAttr.needsUpdate = this.colAttr.needsUpdate = this.alphaAttr.needsUpdate = this.sizeAttr.needsUpdate = true;
+    this.posAttr.needsUpdate = this.alphaAttr.needsUpdate = this.sizeAttr.needsUpdate = true;
+    // Colors only change when particles are born or removed, so skip re-uploading them otherwise.
+    if (this.colorsDirty) {
+      this.colAttr.needsUpdate = true;
+      this.colorsDirty = false;
+    }
 
     for (const r of this.rings) {
       if (!r.mesh.visible) continue;
@@ -182,6 +188,7 @@ export class Effects {
   // Swap the last live particle into this slot.
   kill(i) {
     const j = --this.count;
+    this.colorsDirty = true;
     if (i === j) return;
     const i3 = i * 3, j3 = j * 3;
     for (let c = 0; c < 3; c++) {

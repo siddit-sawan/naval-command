@@ -5,25 +5,52 @@ export const SUN_DIR = new THREE.Vector3(-0.55, 0.15, -0.8).normalize();
 export const FOG_DENSITY = 0.00068;
 export const HORIZON = new THREE.Color().setRGB(0.5, 0.6, 0.7, THREE.LinearSRGBColorSpace);
 
-// Value noise with analytic derivatives: returns (value, d/dx, d/dy).
-export const NOISE_GLSL = /* glsl */ `
-float hash12(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
+// Value noise with analytic derivatives, baked once into a tiling texture so shaders pay one
+// texture read per lookup instead of hashing four corners every pixel.
+// Texel layout: R = value, G/B = d/dx, d/dy packed as d * 0.25 + 0.5.
+const NOISE_CELLS = 32;
+const NOISE_RES = 256;
+
+function bakeNoiseTexture() {
+  const hash = (x, y) => {
+    const s = Math.sin(((x % NOISE_CELLS) + NOISE_CELLS) % NOISE_CELLS * 127.1
+      + (((y % NOISE_CELLS) + NOISE_CELLS) % NOISE_CELLS) * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  const data = new Uint8Array(NOISE_RES * NOISE_RES * 4);
+  const scale = NOISE_CELLS / NOISE_RES;
+  for (let py = 0; py < NOISE_RES; py++) {
+    for (let px = 0; px < NOISE_RES; px++) {
+      const x = (px + 0.5) * scale, y = (py + 0.5) * scale;
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix, fy = y - iy;
+      const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+      const dux = 6 * fx * (1 - fx), duy = 6 * fy * (1 - fy);
+      const a = hash(ix, iy), b = hash(ix + 1, iy), c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+      const k = a - b - c + d;
+      const o = (py * NOISE_RES + px) * 4;
+      data[o] = Math.round((a + (b - a) * ux + (c - a) * uy + k * ux * uy) * 255);
+      data[o + 1] = Math.round(THREE.MathUtils.clamp(dux * (b - a + k * uy) * 0.25 + 0.5, 0, 1) * 255);
+      data[o + 2] = Math.round(THREE.MathUtils.clamp(duy * (c - a + k * ux) * 0.25 + 0.5, 0, 1) * 255);
+      data[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, NOISE_RES, NOISE_RES, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
 }
+export const NOISE_TEXTURE = bakeNoiseTexture();
+
+// Returns (value, d/dx, d/dy) like the analytic version it replaces.
+export const NOISE_GLSL = /* glsl */ `
+uniform sampler2D uNoise;
 vec3 noised(vec2 x) {
-  vec2 i = floor(x);
-  vec2 f = fract(x);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  vec2 du = 6.0 * f * (1.0 - f);
-  float a = hash12(i);
-  float b = hash12(i + vec2(1.0, 0.0));
-  float c = hash12(i + vec2(0.0, 1.0));
-  float d = hash12(i + vec2(1.0, 1.0));
-  float k = a - b - c + d;
-  return vec3(a + (b - a) * u.x + (c - a) * u.y + k * u.x * u.y,
-              du * (vec2(b - a, c - a) + k * u.yx));
+  vec3 n = texture2D(uNoise, x * ${(1 / NOISE_CELLS).toFixed(6)}).rgb;
+  return vec3(n.r, (n.gb - 0.5) * 4.0);
 }
 `;
 
@@ -44,6 +71,7 @@ export function createSky() {
     uniforms: {
       uTime: { value: 0 },
       uSunDir: { value: SUN_DIR },
+      uNoise: { value: NOISE_TEXTURE },
     },
     vertexShader: /* glsl */ `
       varying vec3 vDir;

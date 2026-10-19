@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SUN_DIR, FOG_DENSITY, NOISE_GLSL, SKY_GLSL } from './sky.js';
+import { SUN_DIR, FOG_DENSITY, NOISE_GLSL, SKY_GLSL, NOISE_TEXTURE } from './sky.js';
 
 // [dirX, dirZ, steepness, wavelength]. Steepness must sum below 1 or crests loop over themselves.
 // Wavelengths and directions are deliberately irregular so the swell doesn't tile into a grid.
@@ -95,35 +95,54 @@ export function sampleHeightFast(x, z, t) {
   return h;
 }
 
-// Grid that is dense near the middle and stretches out toward the horizon.
-function buildGeometry(halfSize, segs) {
+// Grid that is dense near the middle and stretches out toward the horizon, cut into tiles so the
+// GPU only runs the wave math for tiles inside the camera's view.
+function buildTiles(halfSize, segs, tiles) {
   const remap = (u) => Math.sign(u) * halfSize * Math.abs(u) * (0.065 + 0.935 * Math.abs(u));
-  const positions = new Float32Array((segs + 1) * (segs + 1) * 3);
-  let o = 0;
-  for (let j = 0; j <= segs; j++) {
-    const z = remap((j / segs) * 2 - 1);
-    for (let i = 0; i <= segs; i++) {
-      positions[o++] = remap((i / segs) * 2 - 1);
-      positions[o++] = 0;
-      positions[o++] = z;
+  const coord = Array.from({ length: segs + 1 }, (_, i) => remap((i / segs) * 2 - 1));
+  const per = segs / tiles;
+  const geos = [];
+  for (let tj = 0; tj < tiles; tj++) {
+    for (let ti = 0; ti < tiles; ti++) {
+      const i0 = ti * per, j0 = tj * per;
+      const n = per + 1;
+      const positions = new Float32Array(n * n * 3);
+      let o = 0;
+      for (let j = 0; j < n; j++) {
+        for (let i = 0; i < n; i++) {
+          positions[o++] = coord[i0 + i];
+          positions[o++] = 0;
+          positions[o++] = coord[j0 + j];
+        }
+      }
+      const index = new Uint16Array(per * per * 6);
+      o = 0;
+      for (let j = 0; j < per; j++) {
+        for (let i = 0; i < per; i++) {
+          const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+          index[o++] = a; index[o++] = c; index[o++] = b;
+          index[o++] = b; index[o++] = c; index[o++] = d;
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setIndex(new THREE.BufferAttribute(index, 1));
+      // Pad the bounds by the largest wave displacement so tiles aren't culled while visible.
+      const x0 = coord[i0], x1 = coord[i0 + per], z0 = coord[j0], z1 = coord[j0 + per];
+      geo.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3((x0 + x1) / 2, 0, (z0 + z1) / 2),
+        Math.hypot(x1 - x0, z1 - z0) / 2 + 8,
+      );
+      geos.push(geo);
     }
   }
-  const index = [];
-  for (let j = 0; j < segs; j++) {
-    for (let i = 0; i < segs; i++) {
-      const a = j * (segs + 1) + i, b = a + 1, c = a + segs + 1, d = c + 1;
-      index.push(a, c, b, b, c, d);
-    }
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setIndex(index);
-  return geo;
+  return geos;
 }
 
 const vertexShader = /* glsl */ `
   uniform float uTime;
-  uniform vec4 uWaves[WAVE_COUNT];
+  uniform vec4 uWaves[WAVE_COUNT];   // dir.xy, steepness, wavelength
+  uniform vec4 uWaveK[WAVE_COUNT];   // k, angular speed, 1/k (precomputed on the CPU)
   uniform vec4 uIslands[MAX_ISLANDS];
   varying vec3 vWorld;
   varying vec3 vNormal;
@@ -135,7 +154,10 @@ const vertexShader = /* glsl */ `
     for (int i = 0; i < MAX_ISLANDS; i++) {
       vec4 is = uIslands[i];
       if (is.z <= 0.0) continue;
-      f = min(f, 0.25 + 0.75 * smoothstep(is.z, is.z + SHELTER_RANGE, length(p - is.xy)));
+      vec2 dp = p - is.xy;
+      float reach = is.z + SHELTER_RANGE;
+      if (dot(dp, dp) > reach * reach) continue;
+      f = min(f, 0.25 + 0.75 * smoothstep(is.z, reach, length(dp)));
     }
     return f;
   }
@@ -153,11 +175,10 @@ const vertexShader = /* glsl */ `
       // Fade short waves with distance; the grid is too coarse out there to draw them.
       float steep = w.z * sh * (1.0 - smoothstep(w.w * 25.0, w.w * 70.0, camDist));
       if (steep <= 0.0) continue;
-      float k = 6.2831853 / w.w;
-      float c = sqrt(9.8 / k);
+      vec4 wk = uWaveK[i];
       vec2 d = w.xy;
-      float f = k * (dot(d, p.xz) - c * uTime);
-      float a = steep / k;
+      float f = wk.x * dot(d, p.xz) - wk.y * uTime;
+      float a = steep * wk.z;
       float s = sin(f), co = cos(f);
       tangent += vec3(-d.x * d.x * steep * s, d.x * steep * co, -d.x * d.y * steep * s);
       binormal += vec3(-d.x * d.y * steep * s, d.y * steep * co, -d.y * d.y * steep * s);
@@ -196,10 +217,13 @@ const fragmentShader = /* glsl */ `
     // A broad, slowly drifting undulation that survives into the distance and breaks up repetition.
     vec2 broad = noised(p * 0.012 + vec2(uTime * 0.01, -uTime * 0.008)).yz * 0.012 * 9.0
                + noised(p * 0.031 - vec2(uTime * 0.02, 0.0)).yz * 0.031 * 4.0;
-    vec2 g = broad * (1.0 - smoothstep(1500.0, 2500.0, dist))
-           + (noised(p * 0.07 + vec2(uTime * 0.10, uTime * 0.04)).yz * 0.07
-           + noised(p * 0.19 + vec2(-uTime * 0.08, uTime * 0.13)).yz * 0.19 * 0.55
-           + noised(p * 0.53 + vec2(uTime * 0.21, -uTime * 0.17)).yz * 0.53 * 0.3) * detail;
+    vec2 g = broad * (1.0 - smoothstep(1500.0, 2500.0, dist));
+    // Fine ripples only near the camera; beyond 700 they have faded out anyway.
+    if (detail > 0.0) {
+      g += (noised(p * 0.07 + vec2(uTime * 0.10, uTime * 0.04)).yz * 0.07
+          + noised(p * 0.19 + vec2(-uTime * 0.08, uTime * 0.13)).yz * 0.19 * 0.55
+          + noised(p * 0.53 + vec2(uTime * 0.21, -uTime * 0.17)).yz * 0.53 * 0.3) * detail;
+    }
     vec3 N = normalize(normalize(vNormal) + vec3(-g.x, 0.0, -g.y) * 0.55);
 
     vec3 L = uSunDir;
@@ -255,7 +279,9 @@ export function createOcean() {
     uTime: { value: 0 },
     uSunDir: { value: SUN_DIR },
     uFogDensity: { value: FOG_DENSITY },
+    uNoise: { value: NOISE_TEXTURE },
     uWaves: { value: WAVES.map((w) => new THREE.Vector4(w.dx, w.dz, w.steep, w.len)) },
+    uWaveK: { value: WAVES.map((w) => new THREE.Vector4(w.k, w.k * w.c, 1 / w.k, 0)) },
     uIslands: { value: Array.from({ length: MAX_ISLANDS }, () => new THREE.Vector4()) },
   };
   const material = new THREE.ShaderMaterial({
@@ -269,9 +295,10 @@ export function createOcean() {
     },
   });
 
-  // 320x320 cells: about 200k triangles, with most of them packed near the camera.
-  const mesh = new THREE.Mesh(buildGeometry(2600, 320), material);
-  mesh.frustumCulled = false;
+  // 320x320 cells (about 200k triangles, most packed near the camera) in 8x8 tiles. Typically
+  // well under half the tiles are in view, and the rest are skipped by frustum culling.
+  const mesh = new THREE.Group();
+  for (const geo of buildTiles(2600, 320, 8)) mesh.add(new THREE.Mesh(geo, material));
 
   return {
     mesh,

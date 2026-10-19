@@ -3,7 +3,7 @@ import { createOcean } from './ocean.js';
 import { createSky, SUN_DIR, FOG_DENSITY, HORIZON } from './sky.js';
 import { createScenery } from './scenery.js';
 import { Effects } from './effects.js';
-import { Game } from './game.js';
+import { Game, warmupMeshes } from './game.js';
 import { Hud } from './hud.js';
 import { UNITS, UNIT_ORDER, MAP } from './config.js';
 import { sfx, unlock, setMuted, isMuted } from './audio.js';
@@ -455,23 +455,42 @@ function frame() {
 }
 
 // ---------- Boot ----------
+// Compile every shader during the loading screen, including ones for things that start hidden
+// (selection rings, health bars, shells), so nothing stutters the first time it appears.
+async function precompile() {
+  const hidden = [];
+  scene.traverse((o) => { if (!o.visible) { hidden.push(o); o.visible = true; } });
+  const extras = warmupMeshes();
+  for (const m of extras) scene.add(m);
+  try {
+    await renderer.compileAsync(scene, camera); // uses parallel compilation where the browser supports it
+  } catch {
+    renderer.compile(scene, camera);
+  }
+  for (const m of extras) scene.remove(m);
+  for (const o of hidden) o.visible = false;
+}
+
 sdk('loadingStart');
 newGame(true);
-renderer.compile(scene, camera);
-renderer.setAnimationLoop(frame);
-
-let progress = 0;
 const fill = $('loadFill');
+let progress = 0;
+let compiled = false;
+precompile().then(() => {
+  compiled = true;
+  renderer.setAnimationLoop(frame);
+});
 (function tickLoad() {
-  progress = Math.min(1, progress + 0.05);
+  // The bar creeps toward 90% while shaders compile, then finishes.
+  progress = compiled ? Math.min(1, progress + 0.08) : Math.min(0.9, progress + (0.9 - progress) * 0.06);
   fill.style.width = `${progress * 100}%`;
   if (progress < 1) {
     requestAnimationFrame(tickLoad);
     return;
   }
   sdk('loadingStop');
-  setTimeout(() => setState('menu'), 200);
+  setTimeout(() => setState('menu'), 150);
 })();
 
 // Exposed for debugging from the browser console.
-window.navalCommand = { get game() { return game; }, renderer, UNITS, get pixelRatio() { return pixelRatio; } };
+window.navalCommand = { get game() { return game; }, renderer, scene, camera, UNITS, get pixelRatio() { return pixelRatio; } };
