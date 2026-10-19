@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Naval Command</title>
+  <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+  <script type="importmap">
+    { "imports": { "three": "./lib/three.module.min.js" } }
+  </script>
+  <style>
+    :root {
+      --bg: #06131f;
+      --panel: rgba(8, 24, 38, 0.86);
+      --panel-border: rgba(120, 190, 230, 0.25);
+      --text: #e6f2fa;
+      --muted: #8fb0c4;
+      --accent: #f0b429;
+      --blue: #3fa2ff;
+      --red: #ff5a4f;
+      --green: #4cd68a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: var(--bg); color: var(--text);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      user-select: none; -webkit-user-select: none;
+      touch-action: none;
+    }
+    canvas#game { display: block; width: 100%; height: 100%; }
+    .hidden { display: none !important; }
+
+    /* ---------- Screens ---------- */
+    .screen {
+      position: fixed; inset: 0; z-index: 20;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at center, rgba(6, 30, 50, 0.75), rgba(2, 8, 14, 0.95));
+      text-align: center; padding: 16px;
+    }
+    /* Let the animated ocean show through behind the menu and pause screens. */
+    #menu, #pause {
+      background: radial-gradient(ellipse at center, rgba(6, 30, 50, 0.25), rgba(2, 8, 14, 0.7));
+    }
+    .title {
+      font-size: clamp(36px, 7vw, 76px); font-weight: 900; letter-spacing: 4px;
+      text-transform: uppercase;
+      background: linear-gradient(180deg, #ffffff, #7cc4f0);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      text-shadow: 0 6px 30px rgba(63, 162, 255, 0.35);
+    }
+    .subtitle { color: var(--muted); margin: 8px 0 32px; font-size: clamp(14px, 2vw, 18px); }
+    .btn {
+      font: inherit; font-weight: 700; font-size: 18px; letter-spacing: 1px;
+      color: var(--text); background: linear-gradient(180deg, #1d5b86, #123d5c);
+      border: 1px solid #3d89bd; border-radius: 10px;
+      padding: 12px 34px; margin: 6px; min-width: 220px; cursor: pointer;
+      transition: transform .1s, filter .15s;
+    }
+    .btn:hover { filter: brightness(1.2); transform: translateY(-1px); }
+    .btn:active { transform: translateY(1px); }
+    .btn.primary { background: linear-gradient(180deg, #f0b429, #c98a0c); border-color: #ffd36b; color: #1a1205; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 18px; }
+    .diff { min-width: 120px; padding: 10px 18px; font-size: 15px; }
+    .diff.active { outline: 2px solid var(--accent); }
+    .help {
+      margin-top: 26px; color: var(--muted); font-size: 14px; line-height: 1.7;
+      max-width: 560px; background: rgba(0,0,0,0.25); padding: 14px 20px; border-radius: 10px;
+    }
+    .help b { color: var(--text); }
+
+    /* Loading */
+    #loading .bar { width: min(360px, 80vw); height: 8px; background: #0e2a40; border-radius: 4px; overflow: hidden; margin-top: 24px; }
+    #loading .fill { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+    /* ---------- HUD ---------- */
+    #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+    #hud > * { pointer-events: auto; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--panel-border);
+      border-radius: 10px; backdrop-filter: blur(4px);
+    }
+    #topbar {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 20px; align-items: center; padding: 8px 18px; font-weight: 700;
+    }
+    #topbar .stat { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    #topbar .gold { color: var(--accent); font-size: 20px; }
+    #topbar .income { color: var(--green); font-size: 14px; }
+    #topbar .outposts { font-size: 14px; }
+    #topbar .outposts .you { color: var(--blue); }
+    #topbar .outposts .foe { color: var(--red); }
+    #topbar .timer { color: var(--muted); font-size: 14px; }
+    .icon-btn {
+      font: inherit; background: none; border: 1px solid var(--panel-border); color: var(--text);
+      border-radius: 6px; width: 32px; height: 32px; cursor: pointer; font-size: 16px;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,0.08); }
+
+    #build {
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 8px; padding: 8px;
+    }
+    .unit-btn {
+      font: inherit; color: var(--text); cursor: pointer;
+      width: 104px; padding: 8px 6px; border-radius: 8px;
+      background: linear-gradient(180deg, #17405f, #0e2b42); border: 1px solid #2f6d97;
+      display: flex; flex-direction: column; align-items: center; gap: 2px; position: relative;
+    }
+    .unit-btn:hover:not(:disabled) { filter: brightness(1.25); }
+    .unit-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .unit-btn .key {
+      position: absolute; top: 3px; left: 6px; font-size: 11px; color: var(--muted);
+    }
+    .unit-btn .name { font-weight: 700; font-size: 14px; }
+    .unit-btn .cost { color: var(--accent); font-size: 13px; font-weight: 700; }
+    .unit-btn .desc { color: var(--muted); font-size: 11px; }
+    .unit-btn .prog {
+      position: absolute; left: 0; bottom: 0; height: 3px; background: var(--green);
+      border-radius: 0 0 8px 8px; width: 0;
+    }
+    #queue { position: absolute; bottom: 104px; left: 50%; transform: translateX(-50%); font-size: 13px; color: var(--muted); padding: 4px 12px; }
+
+    #selection {
+      position: absolute; bottom: 10px; left: 10px; width: 230px; padding: 10px 12px; font-size: 13px;
+    }
+    #selection h3 { font-size: 14px; margin-bottom: 6px; color: var(--blue); }
+    #selection .muted { color: var(--muted); }
+    #selection .hpbar { height: 6px; background: #2a1414; border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
+    #selection .hpbar > div { height: 100%; background: var(--green); }
+
+    #minimap {
+      position: absolute; bottom: 10px; right: 10px; width: 200px; height: 200px; padding: 4px;
+    }
+    #minimap canvas { width: 100%; height: 100%; border-radius: 6px; display: block; cursor: pointer; }
+
+    #toast {
+      position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+      font-weight: 700; font-size: 16px; padding: 8px 18px; color: var(--accent);
+      transition: opacity .3s; opacity: 0; pointer-events: none;
+    }
+    #toast.show { opacity: 1; }
+
+    #selbox {
+      position: fixed; border: 1px solid #7fd0ff; background: rgba(127, 208, 255, 0.12);
+      pointer-events: none; z-index: 11;
+    }
+
+    /* Game over */
+    #gameover .result { font-size: clamp(40px, 8vw, 80px); font-weight: 900; letter-spacing: 3px; }
+    #gameover .result.win { color: var(--accent); }
+    #gameover .result.lose { color: var(--red); }
+    #gameover .stats { color: var(--muted); margin: 14px 0 28px; line-height: 1.8; }
+
+    @media (max-width: 720px) {
+      #selection { display: none; }
+      #minimap { width: 130px; height: 130px; bottom: 112px; }
+      .unit-btn { width: 76px; }
+      .unit-btn .desc { display: none; }
+      #topbar { gap: 10px; padding: 6px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- Loading -->
+  <div id="loading" class="screen">
+    <div class="title">Naval Command</div>
+    <div class="bar"><div class="fill" id="loadFill"></div></div>
+  </div>
+
+  <!-- Main menu -->
+  <div id="menu" class="screen hidden">
+    <div class="title">Naval Command</div>
+    <div class="subtitle">Command your fleet. Seize the islands. Sink the enemy harbor.</div>
+    <div class="row" id="diffRow">
+      <button class="btn diff" data-diff="easy">Easy</button>
+      <button class="btn diff active" data-diff="normal">Normal</button>
+      <button class="btn diff" data-diff="hard">Hard</button>
+    </div>
+    <button class="btn primary" id="playBtn">Play</button>
+    <div class="help">
+      <b>Left-click / drag</b> select ships &nbsp;·&nbsp; <b>Right-click</b> move / attack<br />
+      <b>WASD / Arrows</b> pan &nbsp;·&nbsp; <b>Wheel</b> zoom &nbsp;·&nbsp; <b>Q / E</b> rotate<br />
+      <b>1–4</b> build ships &nbsp;·&nbsp; <b>Ctrl+A</b> select all &nbsp;·&nbsp; <b>H</b> jump home &nbsp;·&nbsp; <b>Esc</b> pause<br />
+      Capture outposts for income. Destroy the enemy harbor to win.
+    </div>
+  </div>
+
+  <!-- Pause -->
+  <div id="pause" class="screen hidden">
+    <div class="title">Paused</div>
+    <div style="height: 28px"></div>
+    <button class="btn primary" id="resumeBtn">Resume</button>
+    <button class="btn" id="quitBtn">Main Menu</button>
+  </div>
+
+  <!-- Game over -->
+  <div id="gameover" class="screen hidden">
+    <div class="result" id="resultText">Victory</div>
+    <div class="stats" id="resultStats"></div>
+    <button class="btn primary" id="againBtn">Play Again</button>
+    <button class="btn" id="menuBtn">Main Menu</button>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="topbar" class="panel">
+      <div class="stat gold">⛃ <span id="gold">0</span></div>
+      <div class="stat income">+<span id="income">0</span>/s</div>
+      <div class="stat outposts">⚑ <span class="you" id="myOutposts">0</span> / <span class="foe" id="foeOutposts">0</span></div>
+      <div class="stat timer" id="timer">0:00</div>
+      <button class="icon-btn" id="muteBtn" title="Mute (M)">🔊</button>
+      <button class="icon-btn" id="pauseBtn" title="Pause (Esc)">❚❚</button>
+    </div>
+
+    <div id="toast" class="panel"></div>
+    <div id="queue" class="panel hidden"></div>
+
+    <div id="build" class="panel">
+      <button class="unit-btn" data-unit="corvette"><span class="key">1</span><span class="name">Corvette</span><span class="cost">⛃ 60</span><span class="desc">Fast scout</span><div class="prog"></div></button>
+      <button class="unit-btn" data-unit="destroyer"><span class="key">2</span><span class="name">Destroyer</span><span class="cost">⛃ 120</span><span class="desc">All-rounder</span><div class="prog"></div></button>
+      <button class="unit-btn" data-unit="submarine"><span class="key">3</span><span class="name">Submarine</span><span class="cost">⛃ 150</span><span class="desc">Stealth torpedoes</span><div class="prog"></div></button>
+      <button class="unit-btn" data-unit="battleship"><span class="key">4</span><span class="name">Battleship</span><span class="cost">⛃ 280</span><span class="desc">Long-range guns</span><div class="prog"></div></button>
+    </div>
+
+    <div id="selection" class="panel">
+      <h3 id="selTitle">No selection</h3>
+      <div id="selBody" class="muted">Click a ship, or drag to select a group.</div>
+    </div>
+
+    <div id="minimap" class="panel"><canvas id="minimapCanvas" width="256" height="256"></canvas></div>
+  </div>
+
+  <div id="selbox" class="hidden"></div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
