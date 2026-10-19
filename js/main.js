@@ -11,9 +11,20 @@ import { sfx, unlock, setMuted, isMuted } from './audio.js';
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
 
+// ---------- Graphics quality (chosen in the main menu, remembered per browser) ----------
+const QUALITY = {
+  high: { label: 'High', maxPixelRatio: 2, ocean: 384, particles: 4000 },
+  balanced: { label: 'Balanced', maxPixelRatio: 1.5, ocean: 320, particles: 3000 },
+  performance: { label: 'Performance', maxPixelRatio: 1, ocean: 256, particles: 1800 },
+};
+const QUALITY_ORDER = ['high', 'balanced', 'performance'];
+let qualityName = 'high';
+try { if (QUALITY[localStorage.getItem('navalGraphics')]) qualityName = localStorage.getItem('navalGraphics'); } catch { /* storage blocked */ }
+const quality = QUALITY[qualityName];
+
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-// High-DPI screens multiply the ocean shader's cost; 1.5 still looks sharp. Lowered further if frames run slow.
-let pixelRatio = Math.min(window.devicePixelRatio, 1.5);
+// Starts at the quality cap; lowered automatically if frames run slow.
+let pixelRatio = Math.min(window.devicePixelRatio, quality.maxPixelRatio);
 renderer.setPixelRatio(pixelRatio);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.9;
@@ -24,16 +35,28 @@ scene.fog = new THREE.FogExp2(HORIZON, FOG_DENSITY);
 const FOV = 50;
 const camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, 9000);
 
-scene.add(new THREE.HemisphereLight(0xb8d4ec, 0x1d3a44, 1.1));
+// The sky now also lights the scene through reflections, so the fill light is gentler.
+scene.add(new THREE.HemisphereLight(0xb8d4ec, 0x1d3a44, 0.6));
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.4);
 sun.position.copy(SUN_DIR).multiplyScalar(100);
 scene.add(sun);
 
 const sky = createSky();
 scene.add(sky.mesh);
-const ocean = createOcean();
+
+// Reflections: render the sky once into an environment map so hulls, glass and metal mirror it.
+{
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  envScene.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), sky.mesh.material));
+  scene.environment = pmrem.fromScene(envScene, 0, 0.1, 100).texture;
+  scene.environmentIntensity = 0.9;
+  pmrem.dispose();
+}
+
+const ocean = createOcean(quality.ocean);
 scene.add(ocean.mesh);
-const effects = new Effects(scene, 3000);
+const effects = new Effects(scene, quality.particles);
 const scenery = createScenery(scene, effects);
 
 // ---------- CrazyGames SDK ----------
@@ -83,6 +106,22 @@ function lookAt(x, z) {
   goal.z = THREE.MathUtils.clamp(z, -LIMIT, LIMIT);
 }
 
+// Orbit all the way around (yaw is unlimited) and tilt from just above the waves to top-down.
+const PITCH_MIN = 0.12;
+const PITCH_MAX = 1.48;
+const DEFAULT_PITCH = 0.85;
+function rotate(dYaw, dPitch) {
+  goal.yaw += dYaw;
+  goal.pitch = THREE.MathUtils.clamp(goal.pitch + dPitch, PITCH_MIN, PITCH_MAX);
+}
+
+// Back to the default north-facing view; turns the short way round.
+function resetView() {
+  cam.yaw = Math.atan2(Math.sin(cam.yaw), Math.cos(cam.yaw));
+  goal.yaw = 0;
+  goal.pitch = DEFAULT_PITCH;
+}
+
 // ---------- Game lifecycle ----------
 let state = 'loading';
 let difficulty = 'normal';
@@ -129,7 +168,7 @@ function startPlay() {
   sfx.click();
   newGame(false);
   cam.yaw = Math.atan2(Math.sin(cam.yaw), Math.cos(cam.yaw));
-  Object.assign(goal, { x: HOME.x, z: HOME.z, yaw: 0, pitch: 0.85, dist: 170 });
+  Object.assign(goal, { x: HOME.x, z: HOME.z, yaw: 0, pitch: DEFAULT_PITCH, dist: 170 });
   setState('play');
   hud.toast('Capture outposts for income. Destroy the enemy harbor!');
 }
@@ -155,6 +194,19 @@ for (const btn of document.querySelectorAll('#diffRow .diff')) {
     document.querySelectorAll('#diffRow .diff').forEach((b) => b.classList.toggle('active', b === btn));
   });
 }
+
+// Graphics setting: the ocean mesh and particle pool are sized at startup, so changing it reloads.
+const gfxBtn = $('gfxBtn');
+gfxBtn.textContent = `Graphics: ${quality.label}`;
+gfxBtn.addEventListener('click', () => {
+  const next = QUALITY_ORDER[(QUALITY_ORDER.indexOf(qualityName) + 1) % QUALITY_ORDER.length];
+  try { localStorage.setItem('navalGraphics', next); } catch { /* storage blocked */ }
+  location.reload();
+});
+
+$('compassBtn').addEventListener('click', resetView);
+const compassNeedle = $('compassNeedle');
+let lastNeedle = null;
 
 // ---------- Selection & orders ----------
 const playerShips = () => (game ? game.alive('player') : []);
@@ -260,6 +312,7 @@ window.addEventListener('keydown', (e) => {
   if (digit >= 0 && !e.repeat) { build(UNIT_ORDER[digit]); return; }
   if (e.code === 'KeyM' && !e.repeat) { toggleMute(); return; }
   if (e.code === 'KeyH') lookAt(HOME.x, HOME.z);
+  if (e.code === 'KeyC') resetView();
   if (e.code === 'Space') {
     e.preventDefault();
     const sel = selectedShips();
@@ -277,13 +330,17 @@ function handleKeys(dt) {
   if (has('KeyS', 'ArrowDown')) pan(0, -speed);
   if (has('KeyA', 'ArrowLeft')) pan(-speed, 0);
   if (has('KeyD', 'ArrowRight')) pan(speed, 0);
-  if (has('KeyQ')) goal.yaw -= dt * 1.4;
-  if (has('KeyE')) goal.yaw += dt * 1.4;
+  if (has('KeyQ')) rotate(-dt * 1.4, 0);
+  if (has('KeyE')) rotate(dt * 1.4, 0);
+  if (has('KeyR')) rotate(0, dt * 0.9);
+  if (has('KeyF')) rotate(0, -dt * 0.9);
 }
 
 // ---------- Pointer input ----------
-// Mouse: left click/drag selects, right click moves/attacks, right/middle drag pans.
-// Touch: tap a ship to select, tap water/enemy to command, drag to pan, pinch to zoom.
+// Mouse: left click/drag selects, right click moves/attacks, right drag pans,
+//        middle drag (or Alt + left drag on a touchpad) orbits and tilts the camera.
+// Touch: tap a ship to select, tap water/enemy to command, drag to pan, pinch to zoom,
+//        twist two fingers to rotate, slide two fingers up/down to tilt.
 canvas.addEventListener('wheel', (e) => {
   if (state !== 'play') return;
   e.preventDefault();
@@ -293,16 +350,20 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 const pointers = new Map();
 let pinchStart = 0;
+let pinchAngle = 0;
 let boxing = false;
 
 canvas.addEventListener('pointerdown', (e) => {
   if (state !== 'play') return;
   unlock();
+  if (e.button === 1) e.preventDefault(); // no browser auto-scroll on middle click
   canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, moved: 0, touch: e.pointerType === 'touch' });
+  const orbit = e.pointerType !== 'touch' && (e.button === 1 || (e.button === 0 && e.altKey));
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, moved: 0, touch: e.pointerType === 'touch', orbit });
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
+    pinchAngle = Math.atan2(b.y - a.y, b.x - a.x);
   }
 });
 
@@ -329,8 +390,16 @@ canvas.addEventListener('pointermove', (e) => {
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (pinchStart > 0) goal.dist = THREE.MathUtils.clamp(goal.dist * (pinchStart / d), 40, 380);
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    if (pinchStart > 0) {
+      goal.dist = THREE.MathUtils.clamp(goal.dist * (pinchStart / d), 40, 380);
+      // Twist to rotate; both fingers sliding vertically tilts.
+      rotate(-Math.atan2(Math.sin(angle - pinchAngle), Math.cos(angle - pinchAngle)), dy * 0.002);
+    }
     pinchStart = d;
+    pinchAngle = angle;
+  } else if (p.orbit) {
+    rotate(-dx * 0.006, dy * 0.004);
   } else if (!p.touch && p.button === 0) {
     boxing = p.moved > 6;
     selBox.classList.toggle('hidden', !boxing);
@@ -350,7 +419,7 @@ const endPointer = (e) => {
   pointers.delete(e.pointerId);
   const wasPinch = pinchStart > 0;
   if (pointers.size < 2) pinchStart = 0;
-  if (e.type === 'pointercancel' || wasPinch || state !== 'play') {
+  if (e.type === 'pointercancel' || wasPinch || p.orbit || state !== 'play') {
     boxing = false;
     selBox.classList.add('hidden');
     return;
@@ -444,6 +513,12 @@ function frame() {
   else if (state === 'menu' || state === 'loading') goal.yaw += realDt * 0.035;
 
   applyCamera(realDt);
+  // Compass needle points north relative to the current view.
+  const needleDeg = Math.round(THREE.MathUtils.radToDeg(cam.yaw));
+  if (needleDeg !== lastNeedle) {
+    lastNeedle = needleDeg;
+    compassNeedle.style.transform = `rotate(${needleDeg}deg)`;
+  }
   const focus = { x: cam.x, z: cam.z };
   ocean.update(time, focus);
   sky.update(time, camera.position);

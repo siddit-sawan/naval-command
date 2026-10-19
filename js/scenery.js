@@ -153,6 +153,7 @@ function makeBuoy(color, phase) {
   const glow = new THREE.Color(color).multiplyScalar(4);
   const off = new THREE.Color(color).multiplyScalar(0.25);
   const light = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6).translate(0, 3.6, 0), new THREE.MeshBasicMaterial({ color: off }));
+  light.userData.keep = true; // blinks, so it can't be merged
   g.add(light);
   bake(g, `buoy${color}`);
   g.userData = { light, glow, off, phase, normal: new THREE.Vector3(0, 1, 0) };

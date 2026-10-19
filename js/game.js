@@ -38,7 +38,7 @@ const torpMat = new THREE.MeshBasicMaterial({ color: 0x1a1f24 });
 // Scratch objects reused every frame to avoid garbage-collection hitches.
 const TMP = {
   tmpN: new THREE.Vector3(), fwd: new THREE.Vector3(), side: new THREE.Vector3(),
-  f2: new THREE.Vector3(), basis: new THREE.Matrix4(), funnel: new THREE.Vector3(),
+  f2: new THREE.Vector3(), up: new THREE.Vector3(), basis: new THREE.Matrix4(), funnel: new THREE.Vector3(),
 };
 const EFFECTS_RANGE = 380;
 
@@ -751,19 +751,31 @@ export class Game {
       const visible = this.demo || this.visibleTo(u, 'player');
       u.mesh.visible = visible;
       fwd.set(Math.cos(u.heading), 0, Math.sin(u.heading));
+      // Float like a real hull: sample the water at bow, middle and stern, ride on the average and
+      // pitch with the slope between bow and stern, so crests don't wash over the deck.
       const h = sampleOcean(u.x, u.z, t, tmpN);
+      const reach = s.size * 0.4;
+      const hBow = sampleOcean(u.x + fwd.x * reach, u.z + fwd.z * reach, t);
+      const hStern = sampleOcean(u.x - fwd.x * reach, u.z - fwd.z * reach, t);
+      const settle = 1 - Math.exp(-dt * 4);
+      const ride = (hBow + 2 * h + hStern) / 4;
+      u.ride = u.ride === undefined ? ride : u.ride + (ride - u.ride) * settle;
+      const pitch = Math.atan2(hBow - hStern, 2 * reach) * 0.8;
+      u.pitch = u.pitch === undefined ? pitch : u.pitch + (pitch - u.pitch) * settle;
+      // Roll follows the wave surface sideways; bigger hulls roll less.
       const n = u.mesh.userData.normal;
-      // Bigger hulls ride over the small waves instead of following each one.
-      n.lerp(tmpN.lerp(UP, Math.min(0.85, 0.3 + s.size / 80)), 1 - Math.exp(-dt * 2.5)).normalize();
-      side.crossVectors(fwd, n).normalize();
-      f2.crossVectors(n, side);
-      basis.makeBasis(f2, n, side);
+      n.lerp(tmpN.lerp(UP, Math.min(0.85, 0.35 + s.size / 80)), 1 - Math.exp(-dt * 2.5)).normalize();
+      f2.set(fwd.x * Math.cos(u.pitch), Math.sin(u.pitch), fwd.z * Math.cos(u.pitch));
+      side.crossVectors(f2, n).normalize();
+      TMP.up.crossVectors(side, f2);
+      basis.makeBasis(f2, TMP.up, side);
       u.mesh.quaternion.setFromRotationMatrix(basis);
-      u.mesh.position.set(u.x, h * 0.85 - (s.stealth ? 0.6 : 0.1), u.z);
+      u.mesh.position.set(u.x, u.ride + (s.stealth ? -0.6 : 0.1), u.z);
       u.mesh.updateMatrixWorld();
 
       const ud = u.mesh.userData;
       if (ud.radar) ud.radar.rotation.y += dt * 2.2;
+      if (ud.flag) ud.flag.rotation.y = Math.sin(t * 3 + u.id) * 0.35;
       this.aimGuns(u, dt);
 
       // Overlays.

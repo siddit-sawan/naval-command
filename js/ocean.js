@@ -274,7 +274,8 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
-export function createOcean() {
+// segments: grid resolution (multiple of 8). 320 is about 200k triangles, most packed near the camera.
+export function createOcean(segments = 320) {
   const uniforms = {
     uTime: { value: 0 },
     uSunDir: { value: SUN_DIR },
@@ -295,10 +296,10 @@ export function createOcean() {
     },
   });
 
-  // 320x320 cells (about 200k triangles, most packed near the camera) in 8x8 tiles. Typically
-  // well under half the tiles are in view, and the rest are skipped by frustum culling.
+  // Cut into 8x8 tiles; typically
+  // well under half are in view, and the rest are skipped by frustum culling.
   const mesh = new THREE.Group();
-  for (const geo of buildTiles(2600, 320, 8)) mesh.add(new THREE.Mesh(geo, material));
+  for (const geo of buildTiles(2600, segments, 8)) mesh.add(new THREE.Mesh(geo, material));
 
   return {
     mesh,
