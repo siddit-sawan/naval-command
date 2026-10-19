@@ -59,8 +59,11 @@ export function createSky() {
       ${SKY_GLSL}
       float fbm(vec2 p) {
         float v = 0.0, a = 0.5;
-        for (int i = 0; i < 5; i++) { v += a * noised(p).x; p *= 2.03; a *= 0.5; }
+        for (int i = 0; i < 4; i++) { v += a * noised(p).x; p *= 2.03; a *= 0.5; }
         return v;
+      }
+      float fbmCoarse(vec2 p) {
+        return 0.5 * noised(p).x + 0.25 * noised(p * 2.03).x + 0.25;
       }
       void main() {
         vec3 d = normalize(vDir);
@@ -73,7 +76,7 @@ export function createSky() {
           vec2 uv = d.xz / (d.y + 0.12) * 1.2 + vec2(uTime * 0.006, uTime * 0.0025);
           float c = fbm(uv);
           float cover = smoothstep(0.5, 0.78, c) * smoothstep(0.0, 0.2, d.y);
-          float shade = smoothstep(0.5, 0.9, fbm(uv + vec2(0.08, 0.05)));
+          float shade = cover > 0.0 ? smoothstep(0.5, 0.9, fbmCoarse(uv + vec2(0.08, 0.05))) : 0.0;
           vec3 cloud = mix(vec3(0.95, 0.92, 0.9), vec3(0.55, 0.6, 0.7), shade);
           cloud += vec3(1.0, 0.6, 0.3) * pow(sd, 5.0) * 0.8;
           col = mix(col, cloud, cover * 0.9);

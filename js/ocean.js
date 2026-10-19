@@ -22,7 +22,7 @@ export const WAVES = WAVE_DEFS.map(([x, z, steep, len]) => {
 
 // Islands calm the water around them and get a foam line. Filled in by the scenery.
 export const ISLANDS = [];
-const MAX_ISLANDS = 4;
+const MAX_ISLANDS = 8;
 const SHELTER_RANGE = 50;
 
 function smoothstep(a, b, x) {
@@ -33,7 +33,10 @@ function smoothstep(a, b, x) {
 function shelter(x, z) {
   let f = 1;
   for (const is of ISLANDS) {
-    const d = Math.hypot(x - is.x, z - is.z);
+    const dx = x - is.x, dz = z - is.z;
+    const reach = is.r + SHELTER_RANGE;
+    if (dx > reach || dx < -reach || dz > reach || dz < -reach) continue;
+    const d = Math.sqrt(dx * dx + dz * dz);
     f = Math.min(f, 0.25 + 0.75 * smoothstep(is.r, is.r + SHELTER_RANGE, d));
   }
   return f;
@@ -73,9 +76,28 @@ export function sampleOcean(x, z, t, outNormal) {
   return h;
 }
 
+// Cheaper height for thousands of foam particles. Only the big swells matter at that scale (the
+// short waves are a few centimetres tall), and one correction pass with the three largest is enough.
+const BIG_WAVES = WAVES.slice(0, 5);
+const SWELLS = WAVES.slice(0, 3);
+export function sampleHeightFast(x, z, t) {
+  const sh = ISLANDS.length ? shelter(x, z) : 1;
+  let ox = 0, oz = 0;
+  for (const w of SWELLS) {
+    const a = (w.steep * sh) / w.k;
+    const co = Math.cos(w.k * (w.dx * x + w.dz * z - w.c * t));
+    ox += w.dx * a * co;
+    oz += w.dz * a * co;
+  }
+  const px = x - ox, pz = z - oz;
+  let h = 0;
+  for (const w of BIG_WAVES) h += ((w.steep * sh) / w.k) * Math.sin(w.k * (w.dx * px + w.dz * pz - w.c * t));
+  return h;
+}
+
 // Grid that is dense near the middle and stretches out toward the horizon.
 function buildGeometry(halfSize, segs) {
-  const remap = (u) => Math.sign(u) * halfSize * Math.abs(u) * (0.1 + 0.9 * Math.abs(u));
+  const remap = (u) => Math.sign(u) * halfSize * Math.abs(u) * (0.065 + 0.935 * Math.abs(u));
   const positions = new Float32Array((segs + 1) * (segs + 1) * 3);
   let o = 0;
   for (let j = 0; j <= segs; j++) {
@@ -202,6 +224,7 @@ const fragmentShader = /* glsl */ `
       vec4 isl = uIslands[i];
       if (isl.z <= 0.0) continue;
       float d = length(p - isl.xy) - isl.z;
+      if (d > 22.0) continue;
       shallow = max(shallow, 1.0 - smoothstep(-2.0, 22.0, d));
       float surf = 0.5 + 0.5 * sin(d * 0.8 + uTime * 1.8 + fn * 2.0);
       shore = max(shore, (1.0 - smoothstep(0.0, 10.0, d)) * smoothstep(0.55, 0.95, surf * 0.7 + fn * 0.5));
@@ -246,7 +269,8 @@ export function createOcean() {
     },
   });
 
-  const mesh = new THREE.Mesh(buildGeometry(2600, 480), material);
+  // 320x320 cells: about 200k triangles, with most of them packed near the camera.
+  const mesh = new THREE.Mesh(buildGeometry(2600, 320), material);
   mesh.frustumCulled = false;
 
   return {

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { sampleOcean } from './ocean.js';
+import { sampleOcean, sampleHeightFast } from './ocean.js';
 
 const FLOAT = 1; // sticks to the water surface
 const GRAVITY = 2; // falls under gravity
@@ -129,6 +129,8 @@ export class Effects {
   }
 
   update(t, dt) {
+    // Floating particles refresh their wave height every third frame; the sea moves slowly enough.
+    this.frame = (this.frame || 0) + 1;
     let i = 0;
     while (i < this.count) {
       this.age[i] += dt;
@@ -145,7 +147,9 @@ export class Effects {
       this.pos[i3] += this.vel[i3] * dt;
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
       if (f & FLOAT) {
-        this.pos[i3 + 1] = sampleOcean(this.pos[i3], this.pos[i3 + 2], t) + 0.25;
+        if ((i + this.frame) % 3 === 0 || this.age[i] < 0.1) {
+          this.pos[i3 + 1] = sampleHeightFast(this.pos[i3], this.pos[i3 + 2], t) + 0.35;
+        }
       } else {
         this.pos[i3 + 1] += this.vel[i3 + 1] * dt;
         // Droplets disappear once they fall back into the sea.

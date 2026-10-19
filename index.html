@@ -11,7 +11,7 @@
   <style>
     :root {
       --bg: #06131f;
-      --panel: rgba(8, 24, 38, 0.86);
+      --panel: rgba(8, 24, 38, 0.9);
       --panel-border: rgba(120, 190, 230, 0.25);
       --text: #e6f2fa;
       --muted: #8fb0c4;
@@ -78,7 +78,7 @@
     #hud > * { pointer-events: auto; }
     .panel {
       background: var(--panel); border: 1px solid var(--panel-border);
-      border-radius: 10px; backdrop-filter: blur(4px);
+      border-radius: 10px;
     }
     #topbar {
       position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
@@ -182,8 +182,9 @@
     <button class="btn primary" id="playBtn">Play</button>
     <div class="help">
       <b>Left-click / drag</b> select ships &nbsp;·&nbsp; <b>Right-click</b> move / attack<br />
-      <b>WASD / Arrows</b> pan &nbsp;·&nbsp; <b>Wheel</b> zoom &nbsp;·&nbsp; <b>Q / E</b> rotate<br />
-      <b>1–4</b> build ships &nbsp;·&nbsp; <b>Ctrl+A</b> select all &nbsp;·&nbsp; <b>H</b> jump home &nbsp;·&nbsp; <b>Esc</b> pause<br />
+      <b>WASD / Arrows / right-drag</b> pan &nbsp;·&nbsp; <b>Wheel</b> zoom &nbsp;·&nbsp; <b>Q / E</b> rotate<br />
+      <b>1–4</b> build ships &nbsp;·&nbsp; <b>Ctrl+A</b> select all &nbsp;·&nbsp; <b>Space</b> find selection &nbsp;·&nbsp; <b>H</b> home<br />
+      <b>M</b> mute &nbsp;·&nbsp; <b>Esc</b> pause &nbsp;·&nbsp; Submarines stay hidden unless enemies are close<br />
       Capture outposts for income. Destroy the enemy harbor to win.
     </div>
   </div>
