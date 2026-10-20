@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS, ESCORT_RANGE } from './config.js';
+import { UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS, HELM_ARMOR, DEATHMATCH, LOADOUTS } from './config.js';
 import { makeShipModel, makeHarbor, makeOutpost } from './models.js';
 import { ISLANDS, sampleOcean } from './ocean.js';
 import { Effects } from './effects.js';
 import { sfx } from './audio.js';
-import { EnemyAI } from './ai.js';
+import { EnemyAI, FleetAI } from './ai.js';
 
 export const other = (team) => (team === 'player' ? 'enemy' : 'player');
 
@@ -34,6 +34,9 @@ const shellGeo = new THREE.SphereGeometry(0.45, 6, 4);
 const shellMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 2.6, 1.2) });
 const torpGeo = new THREE.CapsuleGeometry(0.3, 2.4, 2, 6).rotateZ(Math.PI / 2);
 const torpMat = new THREE.MeshBasicMaterial({ color: 0x1a1f24 });
+const missileGeo = new THREE.CylinderGeometry(0.22, 0.3, 2.8, 6).rotateZ(Math.PI / 2);
+const missileMat = new THREE.MeshBasicMaterial({ color: 0xe8ecef });
+const chargeGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.8, 8);
 
 // Scratch objects reused every frame to avoid garbage-collection hitches.
 const TMP = {
@@ -41,6 +44,10 @@ const TMP = {
   f2: new THREE.Vector3(), up: new THREE.Vector3(), basis: new THREE.Matrix4(), funnel: new THREE.Vector3(),
 };
 const EFFECTS_RANGE = 380;
+const HULL_LETTER = { corvette: 'K', destroyer: 'D', submarine: 'S', battleship: 'B' };
+// Direct-fire shells in fleet battles (deathmatch weapons set their own), and the harbor fortress gun.
+const SHELL_VELOCITY = 240;
+const HARBOR_GUN = { damage: HARBOR.damage, velocity: 240, spread: 4, range: HARBOR.range + HARBOR.radius };
 
 function wrapAngle(a) {
   return Math.atan2(Math.sin(a), Math.cos(a));
@@ -69,21 +76,30 @@ function setHealthBar(bar, frac) {
 
 // One of each projectile, so the loading screen can compile their shaders before the first shot.
 export function warmupMeshes() {
-  return [new THREE.Mesh(shellGeo, shellMat), new THREE.Mesh(torpGeo, torpMat)];
+  return [new THREE.Mesh(shellGeo, shellMat), new THREE.Mesh(torpGeo, torpMat), new THREE.Mesh(missileGeo, missileMat)];
 }
 
 export class Game {
   /**
    * hooks: { toast(text, color), onGameOver(winner) }. In demo mode both fleets are AI-controlled and silent.
-   * In manual mode the player steers one ship (the helm) directly and the rest of the fleet escorts it.
+   * Manual mode is a team deathmatch: the player steers one ship (the helm, starting as `flagship`)
+   * and aims its weapons by hand; each side has five ships and the last fleet afloat wins.
+   * weather (optional) hides ships in fog; see fog.js. livery: the player fleet's paint scheme (livery.js).
    */
-  constructor(scene, effects, { difficulty = 'normal', demo = false, manual = false, hooks = {} } = {}) {
+  constructor(scene, effects, { difficulty = 'normal', demo = false, manual = false, flagship = 'destroyer', weather = null, livery = 'dazzle', hooks = {} } = {}) {
     this.scene = scene;
     this.effects = effects;
     this.demo = demo;
     this.manual = manual && !demo;
+    this.deathmatch = this.manual;
+    this.overNotified = false;
     this.helm = null;
     this.helmInput = { throttle: 0, rudder: 0 };
+    this.fpShip = null; // set by the camera: the ship it rides with hides its own overlays
+    this.weather = weather;
+    this.livery = livery;
+    this.difficulty = difficulty;
+    if (weather) weather.reset();
     this.escortT = 0;
     this.diff = DIFFICULTY[difficulty];
     this.hooks = { toast() {}, onGameOver() {}, ...hooks };
@@ -99,20 +115,22 @@ export class Game {
     this.over = null;
     this.nextId = 1;
     this.nameIndex = 0;
-    this.alerts = { unit: -99, harbor: -99 };
+    this.alerts = { unit: -99, harbor: -99, fog: -99 };
 
     this.teams = {};
     this.harbors = {};
     for (const team of ['player', 'enemy']) {
-      this.teams[team] = { gold: ECONOMY.startGold, queue: [], buildT: 0, built: 0, lost: 0, kills: 0 };
+      const gold = team === 'player' && !demo ? this.diff.playerGold : ECONOMY.startGold;
+      this.teams[team] = { gold, queue: [], buildT: 0, built: 0, lost: 0, kills: 0 };
       const def = MAP.harbors[team];
       const { group, gun } = makeHarbor(def.x, def.z, team, team === 'player' ? 101 : 202);
       this.root.add(group);
       const bar = makeHealthBar(30);
       this.root.add(bar);
+      const hp = team === 'enemy' && !demo ? this.diff.enemyHarborHp : HARBOR.hp;
       this.harbors[team] = {
         kind: 'harbor', team, x: def.x, z: def.z, spawn: def.spawn, radius: HARBOR.radius,
-        hp: HARBOR.hp, maxHp: HARBOR.hp, alive: true, gun, cooldown: 2, group, bar, dyingT: -1,
+        hp, maxHp: hp, alive: true, gun, cooldown: 2, group, bar, dyingT: -1,
         hovered: false, lastHit: -99,
       };
     }
@@ -123,6 +141,10 @@ export class Game {
       return { x, z, owner: null, progress: 0, ...o };
     });
 
+    if (this.deathmatch) {
+      this.setupDeathmatch(flagship);
+      return;
+    }
     this.ai = demo
       ? [new EnemyAI(this, 'enemy', DIFFICULTY.normal), new EnemyAI(this, 'player', DIFFICULTY.normal)]
       : [new EnemyAI(this, 'enemy', this.diff)];
@@ -131,7 +153,25 @@ export class Game {
     for (const team of ['player', 'enemy']) {
       for (const type of ['destroyer', 'corvette']) this.spawn(team, type, true);
     }
-    if (this.manual) this.setHelm(this.alive('player')[0]);
+  }
+
+  // Two identical fleets in line abreast, facing each other across the middle of the map.
+  setupDeathmatch(flagship) {
+    for (const o of this.outposts) o.ring.visible = false;
+    this.ai = [new FleetAI(this, 'enemy', this.diff), new FleetAI(this, 'player', this.diff)];
+    const lineup = [flagship, ...DEATHMATCH.escorts];
+    for (const team of ['player', 'enemy']) {
+      const side = team === 'player' ? 1 : -1;
+      lineup.forEach((type, i) => {
+        // Flagship in the middle, escorts alternating out to either side.
+        const slot = i === 0 ? 0 : (i % 2 ? 1 : -1) * Math.ceil(i / 2);
+        this.spawn(team, type, true, {
+          x: slot * DEATHMATCH.spacing * side, z: DEATHMATCH.startZ * side + Math.abs(slot) * 12 * side,
+          heading: side > 0 ? -Math.PI / 2 : Math.PI / 2,
+        });
+      });
+    }
+    this.setHelm(this.alive('player')[0]);
   }
 
   dispose() {
@@ -148,13 +188,19 @@ export class Game {
 
   incomeOf(team) {
     const owned = this.outposts.filter((o) => o.owner === team).length;
-    const mult = team === 'enemy' && !this.demo ? this.diff.income : 1;
+    const mult = this.demo ? 1 : team === 'enemy' ? this.diff.income : this.diff.playerIncome;
     return (ECONOMY.baseIncome + owned * ECONOMY.outpostIncome) * mult;
   }
 
-  // Submarines are hidden unless an enemy is close enough to detect them, or they recently fired.
+  // Seconds to build one ship of this type.
+  buildTime(team, type) {
+    const mult = this.demo ? 1 : team === 'enemy' ? this.diff.build : this.diff.playerBuild;
+    return UNITS[type].build * mult;
+  }
+
+  // Submarines and ships in fog are hidden unless an enemy is close enough to see them, or they recently fired.
   visibleTo(e, team) {
-    if (e.team === team || e.kind !== 'ship' || !e.stats.stealth) return true;
+    if (e.team === team || e.kind !== 'ship') return true;
     return e.spotted;
   }
 
@@ -172,8 +218,17 @@ export class Game {
       if (d < bestD) { best = e; bestD = d; }
     }
     const h = this.harbors[foe];
-    if (h.alive && this.distTo(u, h) < bestD) best = h;
+    if (!this.deathmatch && h.alive && this.distTo(u, h) < bestD) best = h;
     return best;
+  }
+
+  // The weapon a ship's AI fires: its main loadout weapon, or one made from its class stats.
+  weaponFor(u) {
+    if (u.weapons) return u.weapons[0];
+    const s = u.stats;
+    return s.weapon === 'torpedo'
+      ? { kind: 'torpedo', range: s.range * 1.6, damage: s.damage, speed: 24, count: 1 }
+      : { kind: 'shell', range: s.range, damage: s.damage, velocity: SHELL_VELOCITY, spread: 3, splash: s.splash, subBonus: s.subBonus };
   }
 
   volumeAt(x, z) {
@@ -216,7 +271,10 @@ export class Game {
   // ---------- Manual mode ----------
 
   setHelm(u) {
-    for (const s of this.alive('player')) s.selected = false;
+    for (const s of this.alive('player')) {
+      s.selected = false;
+      s.aimPoint = null;
+    }
     this.helm = u && u.alive ? u : null;
     if (!this.helm) return;
     Object.assign(this.helm, { selected: true, mode: 'idle', target: null, attackTarget: null, engage: null });
@@ -231,51 +289,67 @@ export class Game {
     return this.helm;
   }
 
-  // Fire the helm ship at an enemy, a point on the water, or (null) the nearest enemy in range.
-  // Returns an error message, or null when the shot went out.
-  helmFire(aim) {
+  /**
+   * Fire the helm ship's selected weapon. aim: a point on the water ({x, z}), an enemy (fired at
+   * where it is now, never led), or null for the nearest enemy in range. locked: the target a
+   * missile has locked on to. Returns an error message, or null when the shot went out.
+   */
+  helmFire(aim, locked = null) {
     const u = this.helm;
     if (!u || !u.alive) return 'No ship at the helm';
-    if (u.cooldown > 0) return 'Reloading';
-    const s = u.stats;
-    let target = aim && aim.alive !== undefined ? aim : null;
-    if (!aim) target = this.findTarget(u, s.range);
-    if (!aim && !target) return 'No target in range';
-    if (target && this.distTo(u, target) > s.range) {
-      aim = { x: target.x, z: target.z };
-      target = null;
+    const w = u.weapons[u.weaponIdx];
+    if (u.wcool[u.weaponIdx] > 0) return 'Reloading';
+    if (w.kind === 'missile') {
+      if (!locked || !locked.alive) return 'Hold the crosshair on an enemy ship to lock on';
+      if (this.distTo(u, locked) > w.range) return 'Target out of missile range';
+      this.fire(u, locked, w, true);
+    } else if (w.kind === 'depth') {
+      this.fire(u, u, w, true);
+    } else {
+      if (!aim) {
+        const t = this.findTarget(u, w.range);
+        if (!t) return 'No target in range';
+        aim = t;
+      }
+      if (w.kind === 'shell') {
+        // Exactly where aimed, never led: along the crosshair line for a 3D aim point (gravity then
+        // pulls the shell down), or at the elevation that reaches a point on the water.
+        this.fire(u, aim.y !== undefined ? { x: aim.x, y: aim.y, z: aim.z } : { x: aim.x, z: aim.z }, w, true);
+      } else {
+        // Torpedoes run out at their range.
+        const dx = aim.x - u.x, dz = aim.z - u.z;
+        const k = Math.min(1, w.range / (Math.hypot(dx, dz) || 1));
+        this.fire(u, { x: u.x + dx * k, z: u.z + dz * k }, w, true);
+      }
     }
-    if (!target) {
-      // Shots at open water fly as far as the guns reach, no further.
-      const dx = aim.x - u.x, dz = aim.z - u.z;
-      const d = Math.hypot(dx, dz) || 1;
-      const k = Math.min(1, s.range / d);
-      target = { x: u.x + dx * k, z: u.z + dz * k };
-    }
-    this.fire(u, target);
-    u.cooldown = s.reload;
-    if (target.alive !== undefined) u.aimAt = target;
+    u.wcool[u.weaponIdx] = w.reload;
     return null;
   }
 
-  // Escorts that fall behind regroup on the helm, fighting anything they meet on the way.
-  updateEscorts(dt) {
-    this.escortT -= dt;
-    if (this.escortT > 0) return;
-    this.escortT = 2;
-    const h = this.helm;
-    const behind = this.alive('player').filter((u) => u !== h && u.mode !== 'attack'
-      && Math.hypot(u.x - h.x, u.z - h.z) > ESCORT_RANGE);
-    if (behind.length) this.order(behind, { type: 'attackmove', x: h.x, z: h.z });
+  selectWeapon(i) {
+    const u = this.helm;
+    if (!u || !u.weapons || i < 0 || i >= u.weapons.length) return null;
+    u.weaponIdx = i;
+    return u.weapons[i];
   }
 
   // ---------- Spawning ----------
 
-  spawn(team, type, initial = false) {
-    const stats = UNITS[type];
+  // at: optional { x, z, heading } start position (deathmatch line-up).
+  spawn(team, type, initial = false, at = null) {
+    let stats = UNITS[type];
+    const weapons = this.deathmatch ? LOADOUTS[type] : null;
+    if (weapons) {
+      // AI ships fight with their main weapon, opening fire from a share of its full range.
+      const w = weapons[0];
+      stats = { ...stats, range: w.range * DEATHMATCH.aiRange, damage: w.damage, reload: w.reload };
+    }
     const h = this.harbors[team];
     const toSea = -Math.sign(h.z);
-    const mesh = makeShipModel(type, team);
+    const id = this.nextId++;
+    const name = team === 'player' ? SHIP_NAMES[this.nameIndex++ % SHIP_NAMES.length] : null;
+    // Pennant number painted on the hull, e.g. D 14.
+    const mesh = makeShipModel(type, team === 'player' ? this.livery : 'enemy', `${HULL_LETTER[type]} ${10 + ((id * 37) % 90)}`);
     this.root.add(mesh);
     const ring = new THREE.Mesh(ringGeo(stats.size), overlayMat(0x4cd68a, 0.85));
     const marker = new THREE.Mesh(markerGeo, overlayMat(0x4cd68a, 0.9));
@@ -291,12 +365,11 @@ export class Game {
       this.root.add(o);
     }
 
-    const x = h.spawn.x + (Math.random() - 0.5) * (initial ? 60 : 24);
-    const z = h.z + toSea * (initial ? 80 + Math.random() * 20 : 62);
-    const name = team === 'player' ? SHIP_NAMES[this.nameIndex++ % SHIP_NAMES.length] : null;
+    const x = at ? at.x : h.spawn.x + (Math.random() - 0.5) * (initial ? 60 : 24);
+    const z = at ? at.z : h.z + toSea * (initial ? 80 + Math.random() * 20 : 62);
     const u = {
-      kind: 'ship', id: this.nextId++, type, stats, team, name,
-      x, z, heading: toSea > 0 ? Math.PI / 2 : -Math.PI / 2, speed: initial ? 0 : stats.speed * 0.4,
+      kind: 'ship', id, type, stats, team, name, weapons, weaponIdx: 0, wcool: weapons ? weapons.map(() => 0) : null,
+      x, z, heading: at ? at.heading : toSea > 0 ? Math.PI / 2 : -Math.PI / 2, speed: initial ? 0 : stats.speed * 0.4,
       hp: stats.hp, maxHp: stats.hp, alive: true, mode: 'idle', target: null, attackTarget: null, engage: null,
       cooldown: Math.random() * stats.reload, scanT: Math.random() * 0.3, spotted: false, revealedUntil: 0,
       mesh, ring, marker, path, bar, selected: false, hovered: false, sinkT: 0, lastHit: -99,
@@ -320,24 +393,36 @@ export class Game {
     this.time += dt;
 
     if (!this.over) {
-      for (const team of ['player', 'enemy']) this.updateEconomy(team, dt);
+      if (!this.deathmatch) for (const team of ['player', 'enemy']) this.updateEconomy(team, dt);
       for (const ai of this.ai) ai.update(dt);
-      if (this.manual) {
-        if (!this.helm || !this.helm.alive) {
-          const next = this.cycleHelm();
-          if (next) this.hooks.toast(`You now command HMS ${next.name}`, TEAM_COLORS.player.css);
-        }
-        if (this.helm) this.updateEscorts(dt);
+      if (this.manual && (!this.helm || !this.helm.alive)) {
+        const next = this.cycleHelm();
+        if (next) this.hooks.toast(`You now command HMS ${next.name}`, TEAM_COLORS.player.css);
       }
     }
+    this.updateWeather(dt);
     this.updateSpotting();
     for (const u of this.units) this.updateUnit(u, dt);
+    if (!this.demo) this.repair(dt);
     this.separate();
     this.units = this.units.filter((u) => u.alive || u.sinkT < 5);
     for (const h of Object.values(this.harbors)) this.updateHarbor(h, dt);
-    this.updateOutposts(dt);
+    if (this.deathmatch) this.updateDeathmatch();
+    else this.updateOutposts(dt);
     this.updateProjectiles(dt);
     this.updateVisuals(dt, camera);
+  }
+
+  // Last fleet afloat wins; the end screen follows once the final ship has gone down.
+  updateDeathmatch() {
+    if (!this.over) {
+      for (const team of ['player', 'enemy']) {
+        if (!this.alive(team).length) this.over = { winner: other(team), at: this.time };
+      }
+    } else if (!this.overNotified && this.time - this.over.at > 3) {
+      this.overNotified = true;
+      this.hooks.onGameOver(this.over.winner);
+    }
   }
 
   updateEconomy(team, dt) {
@@ -347,8 +432,7 @@ export class Game {
     if (this.alive(team).length >= ECONOMY.maxShips) return;
     t.buildT += dt;
     const type = t.queue[0];
-    const slow = team === 'enemy' && !this.demo ? this.diff.build : 1;
-    if (t.buildT >= UNITS[type].build * slow) {
+    if (t.buildT >= this.buildTime(team, type)) {
       t.queue.shift();
       t.buildT = 0;
       t.built++;
@@ -360,14 +444,52 @@ export class Game {
     }
   }
 
+  updateWeather(dt) {
+    const event = this.weather && this.weather.step(dt);
+    if (!event || this.demo || this.over) return;
+    if (event === 'front') {
+      this.hooks.toast('Fog is rolling in! Enemies could be anywhere…', '#cfe0ec');
+      sfx.foghorn();
+    } else {
+      this.hooks.toast('The fog is lifting', '#cfe0ec');
+    }
+  }
+
+  // A ship is seen when it is in the open (surface ships), or when an enemy is close enough: subs only
+  // show up within detection range, and fog shrinks everyone's sight. Firing gives a ship away.
   updateSpotting() {
+    const w = this.weather;
     for (const u of this.units) {
-      if (!u.alive || !u.stats.stealth) continue;
-      if (this.time < u.revealedUntil) { u.spotted = true; continue; }
+      if (!u.alive) continue;
+      const was = u.spotted;
+      const sight = w ? w.sightAt(u.x, u.z) : Infinity;
+      if ((!u.stats.stealth && sight === Infinity) || this.time < u.revealedUntil) {
+        u.spotted = true;
+        continue;
+      }
       const foe = other(u.team);
       const h = this.harbors[foe];
-      u.spotted = (h.alive && Math.hypot(u.x - h.x, u.z - h.z) < HARBOR.detect)
-        || this.units.some((e) => e.alive && e.team === foe && Math.hypot(u.x - e.x, u.z - e.z) < e.stats.detect);
+      const harborReach = Math.min(u.stats.stealth ? HARBOR.detect : Infinity, Math.max(sight, HARBOR.detect * 0.6));
+      u.spotted = (h.alive && Math.hypot(u.x - h.x, u.z - h.z) < harborReach)
+        || this.units.some((e) => e.alive && e.team === foe
+          && Math.hypot(u.x - e.x, u.z - e.z) < Math.min(u.stats.stealth ? e.stats.detect : Infinity, sight));
+      // Surprise: an enemy surface ship looming out of the fog right next to the fleet.
+      if (u.spotted && !was && u.team === 'enemy' && !u.stats.stealth && !this.demo
+        && this.time - this.alerts.fog > 15 && this.time > 2) {
+        this.alerts.fog = this.time;
+        this.hooks.toast('Enemy ship sighted in the fog!', TEAM_COLORS.enemy.css);
+      }
+    }
+  }
+
+  // Ships patch up their hulls when they have not been hit for a while.
+  repair(dt) {
+    const rate = this.diff.regen;
+    if (!rate) return;
+    for (const u of this.units) {
+      if (u.alive && u.team === 'player' && (!this.deathmatch || u === this.helm) && u.hp < u.maxHp && this.time - u.lastHit > 6) {
+        u.hp = Math.min(u.maxHp, u.hp + rate * dt);
+      }
     }
   }
 
@@ -432,7 +554,8 @@ export class Game {
   updateHelm(u, dt) {
     const s = u.stats;
     const { throttle, rudder } = this.helmInput;
-    u.cooldown -= dt;
+    for (let i = 0; i < u.wcool.length; i++) u.wcool[i] = Math.max(0, u.wcool[i] - dt);
+    u.cooldown = u.wcool[u.weaponIdx];
     u.scanT -= dt;
     if (u.scanT <= 0) {
       u.scanT = 0.3;
@@ -525,48 +648,197 @@ export class Game {
 
   // ---------- Combat ----------
 
-  fire(u, target) {
+  /**
+   * Fire weapon w (see LOADOUTS; defaults to the ship's main weapon) at target, an entity or a point.
+   * precise: the player's shot, which goes exactly where aimed with only a little dispersion; AI
+   * shots lead moving targets but scatter with distance and difficulty.
+   */
+  fire(u, target, w = this.weaponFor(u), precise = false) {
     const s = u.stats;
-    const acc = u.team === 'enemy' || this.demo ? this.diff.accuracy : 0.9;
+    u.revealedUntil = this.time + REVEAL_TIME;
+    // In a deathmatch both AI fleets shoot equally well, so the player's own aim decides the battle.
+    const acc = u.team === 'enemy' || this.demo || this.deathmatch ? this.diff.accuracy : 0.9;
     const vol = this.volumeAt(u.x, u.z);
-    if (s.weapon === 'torpedo') {
-      const lead = this.leadPoint(u, target, 24);
-      const dx = lead.x - u.x, dz = lead.z - u.z;
-      const d = Math.hypot(dx, dz) || 1;
-      const bow = u.mesh.userData.bow.clone().applyMatrix4(u.mesh.matrixWorld);
-      const mesh = new THREE.Mesh(torpGeo, torpMat);
-      mesh.rotation.y = -Math.atan2(dz, dx);
-      this.root.add(mesh);
-      this.projectiles.push({
-        kind: 'torpedo', team: u.team, x: bow.x, z: bow.z, dx: dx / d, dz: dz / d, speed: 24,
-        traveled: 0, maxDist: s.range * 1.6, damage: s.damage, mesh, bubbleAcc: 0,
-      });
-      u.revealedUntil = this.time + REVEAL_TIME;
+    u.mesh.updateMatrixWorld();
+
+    if (w.kind === 'torpedo') {
+      const lead = precise ? target : this.leadPoint(u, target, w.speed);
+      const base = Math.atan2(lead.z - u.z, lead.x - u.x) + (precise ? 0 : (Math.random() - 0.5) * (1 - acc) * 0.6);
+      const bow = (u.mesh.userData.bow || new THREE.Vector3(s.size * 0.45, -0.3, 0)).clone().applyMatrix4(u.mesh.matrixWorld);
+      const n = w.count || 1;
+      for (let i = 0; i < n; i++) {
+        const a = base + (i - (n - 1) / 2) * (w.fan || 0);
+        const mesh = new THREE.Mesh(torpGeo, torpMat);
+        mesh.rotation.y = -a;
+        this.root.add(mesh);
+        this.projectiles.push({
+          kind: 'torpedo', team: u.team, x: bow.x, z: bow.z, dx: Math.cos(a), dz: Math.sin(a), speed: w.speed,
+          traveled: 0, maxDist: w.range * 1.05, damage: w.damage, mesh, bubbleAcc: 0,
+        });
+      }
       sfx.torpedo(vol);
       return;
     }
 
-    const guns = u.mesh.userData.guns;
-    const dist = this.distTo(u, target);
-    const dur = 0.4 + dist / 110;
-    const lead = this.leadPoint(u, target, dist / dur);
-    const scatter = (1 - acc) * 26 + dist * 0.02;
-    u.mesh.updateMatrixWorld();
-    guns.forEach((g, i) => {
-      const from = g.muzzle.clone().applyMatrix4(g.node.matrixWorld);
-      const a = Math.random() * Math.PI * 2;
-      const r = Math.random() * scatter;
-      const mesh = new THREE.Mesh(shellGeo, shellMat);
-      mesh.position.copy(from);
+    if (w.kind === 'missile') {
+      const mesh = new THREE.Mesh(missileGeo, missileMat);
       this.root.add(mesh);
       this.projectiles.push({
-        kind: 'shell', team: u.team, from, to: { x: lead.x + Math.cos(a) * r, z: lead.z + Math.sin(a) * r },
-        t: -i * 0.08, dur, arc: 4 + dist * 0.18, damage: s.damage / guns.length, splash: s.splash || 0,
-        subBonus: s.subBonus || 1, target, mesh, trailAcc: 0,
+        kind: 'missile', team: u.team, x: u.x, z: u.z, y: 4, heading: u.heading, speed: w.speed, target,
+        life: (w.range * 1.3) / w.speed, damage: w.damage, mesh, trailAcc: 0, age: 0,
       });
-      this.muzzleFlash(from, g);
+      sfx.torpedo(vol);
+      sfx.gun(vol * 0.6);
+      return;
+    }
+
+    if (w.kind === 'depth') {
+      // A pattern of three charges rolled off the stern; they go off a moment later.
+      const fx = Math.cos(u.heading), fz = Math.sin(u.heading);
+      for (let i = 0; i < 3; i++) {
+        const back = s.size * 0.5 + 4 + i * 7;
+        const x = u.x - fx * back + (i - 1) * fz * 5, z = u.z - fz * back - (i - 1) * fx * 5;
+        const mesh = new THREE.Mesh(chargeGeo, torpMat);
+        mesh.position.set(x, 0, z);
+        this.root.add(mesh);
+        this.effects.splash(x, z, this.t, 0.4);
+        this.projectiles.push({ kind: 'depth', team: u.team, x, z, t: 1.6 + i * 0.35, damage: w.damage, radius: w.radius, mesh });
+      }
+      sfx.splash(vol);
+      return;
+    }
+
+    this.fireDirect(u, target, w, precise, acc);
+    sfx.gun(vol, w.damage >= 40);
+  }
+
+  /**
+   * Direct fire: shells leave the muzzle fast and nearly flat, then gravity takes over.
+   * A precise shot at a 3D point (the bridge crosshair) goes straight along the line to it. Otherwise
+   * (AI, or a point on the water) the guns take the low elevation that reaches the target; the AI
+   * also leads moving ships and misjudges bearing and elevation a little.
+   */
+  fireDirect(u, target, w, precise, acc) {
+    const guns = u.mesh.userData.guns.length ? u.mesh.userData.guns : [null];
+    const aimed = precise ? target : this.leadPoint(u, target, w.velocity);
+    const err = precise ? 0 : 1 - acc;
+    guns.forEach((gun, i) => {
+      const from = gun
+        ? gun.muzzle.clone().applyMatrix4(gun.node.matrixWorld)
+        : new THREE.Vector3(u.x + Math.cos(u.heading) * 3, 3, u.z + Math.sin(u.heading) * 3);
+      this.launchShell(u.team, from, aimed, w, {
+        precise, err, delay: i * 0.06, damage: w.damage / guns.length, subBonus: w.subBonus || u.stats.subBonus || 1,
+      });
+      if (gun) this.muzzleFlash(from, gun);
     });
-    sfx.gun(vol, u.type === 'battleship');
+  }
+
+  // One direct-fire shell from 'from' toward 'aimed' (see fireDirect).
+  launchShell(team, from, aimed, w, { precise = false, err = 0, delay = 0, damage = w.damage, subBonus = 1 } = {}) {
+    const g = DEATHMATCH.gravity, v = w.velocity;
+    const cone = (w.spread || 2) / 600;
+    const d = Math.hypot(aimed.x - from.x, aimed.z - from.z) || 1;
+    let yaw = Math.atan2(aimed.z - from.z, aimed.x - from.x);
+    let pitch = precise && aimed.y !== undefined
+      ? Math.atan2(aimed.y - from.y, d)
+      : 0.5 * Math.asin(Math.min(1, (g * d) / (v * v))) + Math.atan2(1.5 - from.y, d);
+    yaw += (Math.random() - 0.5) * 2 * (cone + err * 0.06);
+    pitch += (Math.random() - 0.5) * 2 * (cone * 0.5 + err * 0.01);
+    const vel = new THREE.Vector3(Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch), Math.sin(yaw) * Math.cos(pitch)).multiplyScalar(v);
+    const mesh = new THREE.Mesh(shellGeo, shellMat);
+    mesh.position.copy(from);
+    mesh.visible = false;
+    this.root.add(mesh);
+    this.projectiles.push({
+      kind: 'direct', team, pos: from, vel, delay, traveled: 0, maxDist: Math.max(w.range * 1.8, w.range + 60),
+      damage, splash: w.splash || 0, subBonus, mesh,
+    });
+  }
+
+  // The enemy hull (as a box: length, beam, height to the top of the superstructure) at a point in the air.
+  hullAt(pos, foe) {
+    for (const e of this.units) {
+      if (!e.alive || e.team !== foe) continue;
+      const s = e.stats;
+      const dx = pos.x - e.x, dz = pos.z - e.z;
+      if (dx * dx + dz * dz > s.size * s.size * 0.3) continue;
+      const c = Math.cos(e.heading), sn = Math.sin(e.heading);
+      const along = dx * c + dz * sn, across = -dx * sn + dz * c;
+      const top = s.stealth ? 2.6 : s.size * 0.3 + 1.5;
+      if (Math.abs(along) < s.size * 0.5 && Math.abs(across) < s.size * 0.13 + 0.8 && pos.y < top && pos.y > -1.5) return e;
+    }
+    return null;
+  }
+
+  harborAt(pos, foe) {
+    const h = this.harbors[foe];
+    if (this.deathmatch || !h.alive || h.dyingT >= 0 || pos.y > 14) return null;
+    return Math.hypot(pos.x - h.x, pos.z - h.z) < h.radius ? h : null;
+  }
+
+  // Fly a direct-fire shell in small steps so fast shells can't skip through a hull.
+  updateDirect(p, dt) {
+    if (p.delay > 0) {
+      p.delay -= dt;
+      return true;
+    }
+    p.mesh.visible = true;
+    const foe = other(p.team);
+    const speed = p.vel.length();
+    const steps = Math.max(1, Math.ceil((speed * dt) / 3));
+    const h = dt / steps;
+    const px = p.pos.x, py = p.pos.y, pz = p.pos.z;
+    for (let i = 0; i < steps; i++) {
+      p.vel.y -= DEATHMATCH.gravity * h;
+      p.pos.addScaledVector(p.vel, h);
+      p.traveled += speed * h;
+      const victim = this.hullAt(p.pos, foe) || this.harborAt(p.pos, foe);
+      if (victim) return this.directHit(p, victim);
+      // Mean sea level, not each crest: guns sit low enough that crests would swallow every flat shot.
+      if (p.pos.y < 0) return this.directHit(p, null);
+      if (p.pos.y < 12 && ISLANDS.some((is) => Math.hypot(p.pos.x - is.x, p.pos.z - is.z) < is.r * 0.85)) {
+        this.root.remove(p.mesh);
+        this.explode(p.pos.x, p.pos.y, p.pos.z, 0.6);
+        return false;
+      }
+      if (p.traveled > p.maxDist) {
+        this.root.remove(p.mesh);
+        return false;
+      }
+    }
+    p.mesh.position.copy(p.pos);
+    // Tracer streak along this frame's path.
+    for (let k = 0; k < 3; k++) {
+      const t = k / 3;
+      this.effects.emit(px + (p.pos.x - px) * t, py + (p.pos.y - py) * t, pz + (p.pos.z - pz) * t, 0, 0, 0,
+        { life: 0.22, size0: 0.9, size1: 0.3, alpha: 0.9, color: [1, 0.78, 0.4] });
+    }
+    return true;
+  }
+
+  directHit(p, victim) {
+    const { x, z } = p.pos;
+    const foe = other(p.team);
+    const vol = this.volumeAt(x, z);
+    this.root.remove(p.mesh);
+    if (victim) {
+      // Destroyers' anti-submarine gear: their shells hit submarines harder.
+      this.damage(victim, p.damage * (victim.kind === 'ship' && victim.stats.stealth ? p.subBonus : 1), p.team);
+      this.explode(x, Math.max(p.pos.y, 1), z, p.splash ? 1.2 : 0.7);
+      sfx.explosion(vol, !!p.splash);
+    } else {
+      this.effects.splash(x, z, this.t, p.splash ? 1.3 : 0.8);
+      sfx.splash(vol);
+    }
+    // Heavy shells hurt with near misses too.
+    if (p.splash) {
+      for (const e of this.units) {
+        if (e.alive && e.team === foe && e !== victim && Math.hypot(e.x - x, e.z - z) < p.splash + e.stats.size * 0.3) {
+          this.damage(e, p.damage * 0.5, p.team);
+        }
+      }
+    }
+    return false;
   }
 
   leadPoint(u, target, projectileSpeed) {
@@ -619,32 +891,16 @@ export class Game {
       if (d < e.stats.size * 0.42 + 2 + extra && d < bestD) { best = e; bestD = d; }
     }
     const h = this.harbors[foe];
-    if (!best && h.alive && Math.hypot(h.x - x, h.z - z) < h.radius + extra) best = h;
+    if (!best && !this.deathmatch && h.alive && Math.hypot(h.x - x, h.z - z) < h.radius + extra) best = h;
     return best;
   }
 
   updateProjectiles(dt) {
     const fx = this.effects;
     this.projectiles = this.projectiles.filter((p) => {
-      if (p.kind === 'shell') {
-        p.t += dt;
-        if (p.t < 0) { p.mesh.visible = false; return true; }
-        p.mesh.visible = true;
-        const k = Math.min(1, p.t / p.dur);
-        const x = p.from.x + (p.to.x - p.from.x) * k;
-        const z = p.from.z + (p.to.z - p.from.z) * k;
-        const y = p.from.y * (1 - k) + 4 * p.arc * k * (1 - k);
-        p.mesh.position.set(x, y, z);
-        p.trailAcc += dt * 24;
-        while (p.trailAcc >= 1) {
-          p.trailAcc--;
-          fx.emit(x, y, z, 0, 0.3, 0, { life: 0.5, size0: 0.9, size1: 0.2, alpha: 0.6, color: [1, 0.8, 0.5] });
-        }
-        if (k < 1) return true;
-        this.root.remove(p.mesh);
-        this.impact(p, x, z);
-        return false;
-      }
+      if (p.kind === 'direct') return this.updateDirect(p, dt);
+      if (p.kind === 'missile') return this.updateMissile(p, dt);
+      if (p.kind === 'depth') return this.updateDepthCharge(p, dt);
 
       // Torpedo: runs just under the surface and hits the first enemy hull in its path.
       const step = p.speed * dt;
@@ -679,32 +935,67 @@ export class Game {
     });
   }
 
-  impact(p, x, z) {
+  // Sea-skimming missile: climbs out, then homes on its locked target until it hits or runs dry.
+  updateMissile(p, dt) {
+    const fx = this.effects;
+    p.life -= dt;
+    p.age += dt;
+    const t = p.target;
+    if (t && t.alive) {
+      const want = Math.atan2(t.z - p.z, t.x - p.x);
+      p.heading += THREE.MathUtils.clamp(wrapAngle(want - p.heading), -2.4 * dt, 2.4 * dt);
+    }
+    const sp = p.speed * Math.min(1, 0.4 + p.age);
+    p.x += Math.cos(p.heading) * sp * dt;
+    p.z += Math.sin(p.heading) * sp * dt;
+    const h = sampleOcean(p.x, p.z, this.t);
+    p.y += ((p.age < 0.8 ? 9 : h + 2.5) - p.y) * Math.min(1, dt * 3);
+    p.mesh.position.set(p.x, p.y, p.z);
+    p.mesh.rotation.set(0, -p.heading, 0);
+    p.trailAcc += dt * 40;
+    while (p.trailAcc >= 1) {
+      p.trailAcc--;
+      fx.emit(p.x - Math.cos(p.heading) * 1.6, p.y, p.z - Math.sin(p.heading) * 1.6, 0, 0.4, 0,
+        { life: 1.6, size0: 0.8, size1: 3.5, alpha: 0.5, color: [0.85, 0.85, 0.85] });
+      fx.emit(p.x - Math.cos(p.heading) * 1.5, p.y, p.z - Math.sin(p.heading) * 1.5, 0, 0, 0,
+        { life: 0.12, size0: 1.4, size1: 0.4, alpha: 1, color: [1, 0.7, 0.3] });
+    }
+    const victim = this.hitAt(p.x, p.z, other(p.team), 1);
+    const aground = ISLANDS.some((is) => Math.hypot(p.x - is.x, p.z - is.z) < is.r);
+    if (victim || aground || p.life <= 0) {
+      this.root.remove(p.mesh);
+      if (victim) this.damage(victim, p.damage, p.team);
+      this.explode(p.x, p.y, p.z, victim ? 1.3 : 0.7);
+      if (!victim && !aground) fx.splash(p.x, p.z, this.t, 1);
+      sfx.explosion(this.volumeAt(p.x, p.z), !!victim);
+      return false;
+    }
+    return true;
+  }
+
+  // Depth charge: sinks for a moment, then a column of water. Deadly to submarines, rough on hulls above.
+  updateDepthCharge(p, dt) {
+    p.t -= dt;
+    p.mesh.position.y = sampleOcean(p.x, p.z, this.t) - (1.6 - p.t) * 1.5;
+    if (p.t > 0) return true;
+    this.root.remove(p.mesh);
     const foe = other(p.team);
-    const vol = this.volumeAt(x, z);
-    const victim = this.hitAt(x, z, foe);
-    const h = sampleOcean(x, z, this.t);
-    if (victim) {
-      // Destroyers carry depth charges, so they hit submarines much harder.
-      const vsSub = victim.kind === 'ship' && victim.stats.stealth;
-      this.damage(victim, p.damage * (vsSub ? p.subBonus || 1 : 1), p.team);
-      this.explode(x, h + 1.5, z, p.splash ? 1.2 : 0.7);
-      sfx.explosion(vol, !!p.splash);
-    } else {
-      this.effects.splash(x, z, this.t, p.splash ? 1.3 : 0.8);
-      sfx.splash(vol);
+    for (const e of this.units) {
+      if (!e.alive || e.team !== foe) continue;
+      const d = Math.hypot(e.x - p.x, e.z - p.z) - e.stats.size * 0.3;
+      if (d < p.radius) this.damage(e, p.damage * (e.stats.stealth ? 1 : 0.5) * (1 - Math.max(0, d) / p.radius * 0.5), p.team);
     }
-    if (p.splash) {
-      for (const e of this.units) {
-        if (e.alive && e.team === foe && e !== victim && Math.hypot(e.x - x, e.z - z) < p.splash + e.stats.size * 0.3) {
-          this.damage(e, p.damage * 0.5, p.team);
-        }
-      }
-    }
+    this.effects.splash(p.x, p.z, this.t, 2.2);
+    this.explode(p.x, 0.5, p.z, 0.5);
+    sfx.explosion(this.volumeAt(p.x, p.z));
+    return false;
   }
 
   damage(e, amount, byTeam) {
     if (!e.alive) return;
+    // The difficulty softens enemy fire; in a deathmatch only on your own ship, so escort fights stay even.
+    if (byTeam === 'enemy' && !this.demo && (!this.deathmatch || e === this.helm)) amount *= this.diff.enemyDamage;
+    if (e === this.helm) amount *= HELM_ARMOR;
     e.hp -= amount;
     e.lastHit = this.time;
     if (e.team === 'player' && !this.demo) {
@@ -753,6 +1044,7 @@ export class Game {
     for (const o of [u.ring, u.marker, u.path, u.bar]) o.visible = false;
     if (u.sinkT >= 5) {
       for (const o of [u.mesh, u.ring, u.marker, u.path, u.bar]) this.root.remove(o);
+      u.mesh.userData.dispose();
     }
   }
 
@@ -779,7 +1071,8 @@ export class Game {
       if (before < 3.5 && h.dyingT >= 3.5) this.hooks.onGameOver(this.over.winner);
       return;
     }
-    // The fortress gun covers the harbor approaches.
+    // The fortress gun covers the harbor approaches (not in a deathmatch, where harbors are scenery).
+    if (this.deathmatch) return;
     h.cooldown -= dt;
     const foe = other(h.team);
     let best = null, bestD = HARBOR.range + h.radius;
@@ -796,17 +1089,7 @@ export class Game {
         h.cooldown = HARBOR.reload;
         h.group.updateMatrixWorld();
         const from = g.muzzle.clone().applyMatrix4(g.node.matrixWorld);
-        const dist = Math.hypot(best.x - from.x, best.z - from.z);
-        const dur = 0.4 + dist / 110;
-        const lead = this.leadPoint(h, best, dist / dur);
-        const mesh = new THREE.Mesh(shellGeo, shellMat);
-        this.root.add(mesh);
-        const r = Math.random() * 6;
-        const a = Math.random() * Math.PI * 2;
-        this.projectiles.push({
-          kind: 'shell', team: h.team, from, to: { x: lead.x + Math.cos(a) * r, z: lead.z + Math.sin(a) * r },
-          t: 0, dur, arc: 6 + dist * 0.18, damage: HARBOR.damage, splash: 0, target: best, mesh, trailAcc: 0,
-        });
+        this.launchShell(h.team, from, this.leadPoint(h, best, HARBOR_GUN.velocity), HARBOR_GUN, { err: 0.15 });
         this.muzzleFlash(from, g);
         sfx.gun(this.volumeAt(h.x, h.z), true);
       }
@@ -888,7 +1171,9 @@ export class Game {
 
       // Overlays.
       const enemyHover = u.team !== 'player' && u.hovered;
-      u.ring.visible = visible && (u.selected || u.hovered);
+      // From the bridge you don't see your own ship's ring and health bar.
+      const own = u === this.fpShip;
+      u.ring.visible = visible && !own && (u.selected || u.hovered);
       u.ring.material.color.set(enemyHover ? 0xff5a4f : u.selected ? 0x4cd68a : 0xcfe8ff);
       u.ring.material.opacity = u.selected ? 0.85 : 0.5;
       u.ring.position.set(u.x, h + 0.4, u.z);
@@ -905,7 +1190,7 @@ export class Game {
         u.path.geometry.attributes.position.array.set([u.x, h + 0.4, u.z, target.x, th, target.z]);
         u.path.geometry.attributes.position.needsUpdate = true;
       }
-      u.bar.visible = visible && (u.selected || u.hovered || u.hp < u.maxHp);
+      u.bar.visible = visible && !own && (u.selected || u.hovered || u.hp < u.maxHp);
       if (u.bar.visible) {
         u.bar.position.set(u.x, h + s.size * 0.3 + 7, u.z);
         u.bar.quaternion.copy(camera.quaternion);
@@ -936,7 +1221,8 @@ export class Game {
   aimGuns(u, dt) {
     const guns = u.mesh.userData.guns;
     if (!guns.length) return;
-    const tgt = u.aimAt && this.validTarget(u, u.aimAt) ? u.aimAt : null;
+    // The helm ship's guns follow where the captain is looking (aimPoint); others track their target.
+    const tgt = u.aimPoint || (u.aimAt && this.validTarget(u, u.aimAt) ? u.aimAt : null);
     for (const g of guns) {
       let want = g.rest;
       if (tgt) want = -wrapAngle(Math.atan2(tgt.z - u.z, tgt.x - u.x) - u.heading);

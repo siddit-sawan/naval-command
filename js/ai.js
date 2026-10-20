@@ -1,4 +1,4 @@
-import { UNITS, ECONOMY } from './config.js';
+import { UNITS, ECONOMY, DEATHMATCH } from './config.js';
 
 const other = (team) => (team === 'player' ? 'enemy' : 'player');
 
@@ -120,6 +120,54 @@ export class EnemyAI {
       }
       assigned.set(best, (assigned.get(best) || 0) + 1);
       g.order(group, { type: 'attackmove', x: best.x, z: best.z });
+    }
+  }
+}
+
+// Team deathmatch: every ship hunts the nearest enemy it can see. With nothing in sight, the enemy
+// sweeps toward where the player's fleet is, and the player's escorts stay with the flagship.
+export class FleetAI {
+  constructor(game, team, cfg) {
+    this.game = game;
+    this.team = team;
+    this.cfg = cfg;
+    this.thinkT = 0.5 + Math.random();
+  }
+
+  update(dt) {
+    this.thinkT -= dt;
+    if (this.thinkT > 0) return;
+    this.thinkT = 1.2 + Math.random() * 0.6;
+    const g = this.game;
+    const foes = g.alive(other(this.team));
+    if (!foes.length) return;
+    const seen = foes.filter((e) => g.visibleTo(e, this.team));
+    const flag = this.team === 'player' ? g.helm : null;
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+    for (const u of g.alive(this.team)) {
+      if (u === g.helm) continue;
+      let best = null, bestD = Infinity;
+      for (const e of seen) {
+        if (flag && dist(e, flag) > DEATHMATCH.escortLeash) continue;
+        const d = dist(u, e);
+        if (d < bestD) { best = e; bestD = d; }
+      }
+      if (best) {
+        if (u.attackTarget !== best) g.order([u], { type: 'attack', target: best });
+        continue;
+      }
+      if (flag) {
+        // Form up on the flagship, off its quarter.
+        if (dist(u, flag) > 90) g.order([u], { type: 'attackmove', x: flag.x, z: flag.z });
+        continue;
+      }
+      // Search: head for the enemy fleet's rough position, through the fog.
+      if (u.mode === 'idle' || u.mode === 'attack' || !u.target) {
+        const cx = foes.reduce((s, e) => s + e.x, 0) / foes.length;
+        const cz = foes.reduce((s, e) => s + e.z, 0) / foes.length;
+        g.order([u], { type: 'attackmove', x: cx + (Math.random() - 0.5) * 160, z: cz + (Math.random() - 0.5) * 160 });
+      }
     }
   }
 }

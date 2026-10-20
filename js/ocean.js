@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FOG } from './config.js';
 import { SUN_DIR, FOG_DENSITY, NOISE_GLSL, SKY_GLSL, NOISE_TEXTURE } from './sky.js';
 
 // [dirX, dirZ, steepness, wavelength]. Steepness must sum below 1 or crests loop over themselves.
@@ -199,6 +200,7 @@ const fragmentShader = /* glsl */ `
   uniform float uTime;
   uniform float uFogDensity;
   uniform vec4 uIslands[MAX_ISLANDS];
+  uniform vec4 uFogBanks[FOG_BANKS];
   varying vec3 vWorld;
   varying vec3 vNormal;
   varying float vJacobian;
@@ -265,6 +267,16 @@ const fragmentShader = /* glsl */ `
     col += vec3(1.0, 0.82, 0.6) * (pow(rl, 900.0) * 40.0 + pow(rl, 90.0) * 0.6) * (1.0 - foam);
     col = mix(col, vec3(0.85, 0.9, 0.95) * (0.65 + 0.35 * max(dot(N, L), 0.0)), foam * 0.9);
 
+    // Fog banks lie on the water as a soft white blanket.
+    float bank = 0.0;
+    for (int i = 0; i < FOG_BANKS; i++) {
+      vec4 b = uFogBanks[i];
+      if (b.z <= 0.0) continue;
+      float d = length(p - b.xy);
+      bank = max(bank, (1.0 - smoothstep(b.z * 0.35, b.z, d + fn * 14.0)) * b.w);
+    }
+    col = mix(col, vec3(0.62, 0.68, 0.74), bank * 0.6);
+
     float fog = 1.0 - exp(-pow(dist * uFogDensity, 2.0));
     col = mix(col, skyColor(normalize(vec3(-V.x, 0.001, -V.z))), fog);
 
@@ -284,6 +296,7 @@ export function createOcean(segments = 320) {
     uWaves: { value: WAVES.map((w) => new THREE.Vector4(w.dx, w.dz, w.steep, w.len)) },
     uWaveK: { value: WAVES.map((w) => new THREE.Vector4(w.k, w.k * w.c, 1 / w.k, 0)) },
     uIslands: { value: Array.from({ length: MAX_ISLANDS }, () => new THREE.Vector4()) },
+    uFogBanks: { value: Array.from({ length: FOG.banks }, () => new THREE.Vector4()) },
   };
   const material = new THREE.ShaderMaterial({
     uniforms,
@@ -292,6 +305,7 @@ export function createOcean(segments = 320) {
     defines: {
       WAVE_COUNT: WAVES.length,
       MAX_ISLANDS,
+      FOG_BANKS: FOG.banks,
       SHELTER_RANGE: SHELTER_RANGE.toFixed(1),
     },
   });
@@ -305,6 +319,11 @@ export function createOcean(segments = 320) {
     mesh,
     syncIslands() {
       ISLANDS.slice(0, MAX_ISLANDS).forEach((is, i) => uniforms.uIslands.value[i].set(is.x, is.z, is.r, 0));
+    },
+    // Fog banks as (x, z, radius, thickness), and the overall fog density.
+    setFog(banks, density) {
+      banks.forEach((b, i) => uniforms.uFogBanks.value[i].set(b.x, b.z, b.r, b.thick));
+      uniforms.uFogDensity.value = density;
     },
     // The mesh follows the camera so the sea never ends; snapping keeps vertices from swimming.
     update(t, focus) {

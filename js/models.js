@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mat, makeIsland } from './scenery.js';
 import { TEAM_COLORS, HARBOR, CAPTURE } from './config.js';
 import { bake } from './bake.js';
+import { hullLivery, hullUVs, subLivery, pennantDecal, LIVERIES } from './livery.js';
 
 const deckGrey = mat(0x8d949a);
 const grey = mat(0xa9b1b8);
@@ -11,7 +12,6 @@ const subHull = mat(0x2b3138);
 const white = mat(0xe8eaec);
 const glass = mat(0x1d2b38);
 const redOxide = mat(0x7a2a22); // anti-fouling paint below the waterline
-const teak = mat(0x9c7c55);
 const orange = mat(0xe07a1f);
 const portLight = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.25, 0.2) });
 const starboardLight = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 3, 0.4) });
@@ -20,17 +20,20 @@ const mastLight = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 2.8, 2
 // Painted steel with a little sheen, so hulls pick up the sky reflection.
 const SHIP_FINISH = { roughness: 0.55, metalness: 0.35 };
 
+// Materials for a team ('player' / 'enemy', used by harbors) or for a ship livery id.
 const teamMats = {};
-function team(teamName) {
-  if (!teamMats[teamName]) {
-    const c = TEAM_COLORS[teamName];
-    teamMats[teamName] = {
+function team(key) {
+  if (!teamMats[key]) {
+    const lv = LIVERIES[key];
+    const c = lv ? { hull: lv.base, accent: lv.accent } : TEAM_COLORS[key];
+    teamMats[key] = {
+      name: key,
       hull: mat(c.hull),
       stripe: mat(c.accent),
       accent: new THREE.MeshBasicMaterial({ color: c.accent, side: THREE.DoubleSide }),
     };
   }
-  return teamMats[teamName];
+  return teamMats[key];
 }
 
 const geoCache = new Map();
@@ -52,8 +55,10 @@ function hullShape(L, B) {
 }
 
 function hullGeo(len, beam, depth) {
-  return cached(`hull${len}`, () =>
-    new THREE.ExtrudeGeometry(hullShape(len / 2, beam / 2), { depth, bevelEnabled: false }).rotateX(-Math.PI / 2));
+  return cached(`hull${len}`, () => hullUVs(
+    new THREE.ExtrudeGeometry(hullShape(len / 2, beam / 2), { depth, bevelEnabled: false }).rotateX(-Math.PI / 2),
+    len, beam, depth,
+  ));
 }
 
 // A thin band hugging the hull, for the waterline paint and the team stripe.
@@ -63,12 +68,15 @@ function hullBand(len, beam, height) {
       .rotateX(-Math.PI / 2));
 }
 
-// Hull, waterline paint, team stripe, deck railings and anchors shared by all surface ships.
-function surfaceHull(ship, m, { len, beam, depth, y, deck = deckGrey }) {
+// Painted hull (see livery.js), waterline paint, team stripe, deck railings and anchors shared by all
+// surface ships. Also records where the pennant number goes.
+function surfaceHull(ship, m, { len, beam, depth, y }) {
   const add = builder(ship);
   const L = len / 2, B = beam / 2;
   const deckY = y + depth;
-  add(hullGeo(len, beam, depth), [deck, m.hull], 0, y);
+  add(hullGeo(len, beam, depth), hullLivery(ship.userData.type, m.name, { len, beam, depth, y }, SHIP_FINISH), 0, y);
+  const freeboard = deckY - 0.1;
+  ship.userData.pennantSpot = { x: L * 0.25, y: 0.1 + freeboard * 0.5, z: B * 0.99 + 0.05, h: freeboard * 0.55 };
   add(hullBand(len, beam, 0.5), redOxide, 0, -0.4);
   add(hullBand(len, beam, 0.28), m.stripe, 0, deckY - 0.55);
 
@@ -197,6 +205,7 @@ const BUILDERS = {
     navLights(ship, 0.5, deckY + 1.75, 1.45);
     add(cached('cFunnel', () => new THREE.CylinderGeometry(0.5, 0.6, 1.4, 8)), grey, -2.8, deckY + 0.7);
     add(cached('cFunnelCap', () => new THREE.CylinderGeometry(0.52, 0.52, 0.25, 8)), dark, -2.8, deckY + 1.5);
+    add(cached('cFunnelBand', () => new THREE.CylinderGeometry(0.57, 0.57, 0.3, 8)), m.stripe, -2.8, deckY + 1.05);
     // Anti-ship missile canisters angled over the stern.
     const canister = cached('canister', () => new THREE.BoxGeometry(2.2, 0.45, 0.45));
     for (const z of [-0.55, 0.55]) {
@@ -221,6 +230,7 @@ const BUILDERS = {
     for (const z of [-1.95, 1.95]) lifeboat(ship, -1.2, deckY + 1.4, z);
     add(cached('dFunnel', () => new THREE.CylinderGeometry(0.9, 1.1, 2.6, 8)), grey, -3.6, deckY + 1.8);
     add(cached('dCap', () => new THREE.CylinderGeometry(0.92, 0.92, 0.5, 8)), dark, -3.6, deckY + 3.2);
+    add(cached('dFunnelBand', () => new THREE.CylinderGeometry(0.99, 0.99, 0.45, 8)), m.stripe, -3.6, deckY + 2.55);
     for (const z of [-0.35, 0.35]) add(cached('exhaust', () => new THREE.CylinderGeometry(0.18, 0.18, 0.6, 6)), dark, -3.6, deckY + 3.6, z);
     // Hangar with a close-in gun on its roof, and depth-charge racks at the stern for hunting subs.
     add(cached('dHangar', () => new THREE.BoxGeometry(3, 2, 3.4)), grey, -6.1, deckY + 1.0);
@@ -236,7 +246,7 @@ const BUILDERS = {
 
   battleship(ship, m) {
     const add = builder(ship);
-    const deckY = surfaceHull(ship, m, { len: 36, beam: 7.5, depth: 3.6, y: -1.8, deck: teak });
+    const deckY = surfaceHull(ship, m, { len: 36, beam: 7.5, depth: 3.6, y: -1.8 });
     add(cached('bHouse', () => new THREE.BoxGeometry(10, 3, 5.5)), grey, -1.5, deckY + 1.5);
     // Pagoda tower: stacked decks topped by the bridge and a fire-control director.
     add(cached('bTower', () => new THREE.BoxGeometry(4, 3, 4)), grey, 0.5, deckY + 4.5);
@@ -249,10 +259,13 @@ const BUILDERS = {
     for (const z of [-2.1, 2.1]) add(cached('searchlight', () => new THREE.CylinderGeometry(0.3, 0.3, 0.4, 8).rotateZ(Math.PI / 2)), white, 1.8, deckY + 5.3, z);
     const funnelGeo = cached('bFunnel', () => new THREE.CylinderGeometry(1.2, 1.4, 3.4, 8));
     const capGeo = cached('bFunnelCap', () => new THREE.CylinderGeometry(1.22, 1.22, 0.4, 8));
+    const bandGeo = cached('bFunnelBand', () => new THREE.CylinderGeometry(1.3, 1.3, 0.5, 8));
     add(funnelGeo, grey, -4.5, deckY + 4.6);
     add(capGeo, dark, -4.5, deckY + 6.4);
+    add(bandGeo, m.stripe, -4.5, deckY + 5.6);
     add(funnelGeo, grey, -7.5, deckY + 4.2);
     add(capGeo, dark, -7.5, deckY + 6.0);
+    add(bandGeo, m.stripe, -7.5, deckY + 5.2);
     // Secondary battery and anti-aircraft guns along the superstructure.
     for (const z of [-3.0, 3.0]) {
       secondaryGun(ship, 3.2, deckY + 0.35, z, z > 0 ? -Math.PI / 2 : Math.PI / 2);
@@ -282,7 +295,8 @@ const BUILDERS = {
 
   submarine(ship, m) {
     const add = builder(ship);
-    add(cached('sBody', () => new THREE.CapsuleGeometry(1.5, 15, 4, 16).rotateZ(Math.PI / 2).scale(1, 0.85, 1)), subHull, 0, -0.5);
+    add(cached('sBody', () => new THREE.CapsuleGeometry(1.5, 15, 4, 16).rotateZ(Math.PI / 2).scale(1, 0.85, 1)), subLivery(m.name, SHIP_FINISH), 0, -0.5);
+    ship.userData.pennantSpot = { x: 2.3, y: 1.5, z: 0.58, h: 0.75 };
     add(cached('sDeck', () => new THREE.BoxGeometry(11, 0.12, 1.1)), dark, 0.5, 0.78);
     add(cached('sSail', () => new THREE.BoxGeometry(3.2, 2.6, 1.1)), subHull, 2.5, 1.4);
     add(cached('sSailTop', () => new THREE.BoxGeometry(2.6, 0.2, 0.9)), dark, 2.6, 2.75);
@@ -303,11 +317,33 @@ const BUILDERS = {
   },
 };
 
-export function makeShipModel(type, teamName) {
+// Bridge eye point for the first-person view, in ship-local coordinates (+x is the bow).
+const EYES = {
+  corvette: [0.7, 4.6],
+  destroyer: [1.8, 6.4],
+  submarine: [2.4, 3.8],
+  battleship: [1.4, 10.2],
+};
+
+// liveryId: a key of LIVERIES (see livery.js). pennant: hull number painted on both sides, e.g. "D 14".
+export function makeShipModel(type, liveryId, pennant = '') {
   const ship = new THREE.Group();
-  const parts = BUILDERS[type](ship, team(teamName));
-  bake(ship, `${type}-${teamName}`, SHIP_FINISH);
-  ship.userData = { ...parts, normal: new THREE.Vector3(0, 1, 0) };
+  ship.userData.type = type;
+  const parts = BUILDERS[type](ship, team(liveryId));
+  const spot = ship.userData.pennantSpot;
+  bake(ship, `${type}-${liveryId}`, SHIP_FINISH);
+
+  const decal = pennantDecal(pennant, liveryId);
+  const geo = cached(`pennant${type}`, () => new THREE.PlaneGeometry(spot.h * 2, spot.h));
+  for (const side of [1, -1]) {
+    const plate = new THREE.Mesh(geo, decal.material);
+    plate.position.set(spot.x, spot.y, side * spot.z);
+    if (side < 0) plate.rotation.y = Math.PI;
+    plate.userData.keep = true;
+    ship.add(plate);
+  }
+  const [ex, ey] = EYES[type];
+  ship.userData = { ...parts, normal: new THREE.Vector3(0, 1, 0), eye: new THREE.Vector3(ex, ey, 0), dispose: decal.dispose };
   return ship;
 }
 

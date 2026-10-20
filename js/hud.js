@@ -71,7 +71,7 @@ export class Hud {
       btn.disabled = full || team.gold < UNITS[type].cost;
       const queued = team.queue.filter((q) => q === type).length;
       btn.title = queued ? `${queued} queued` : '';
-      prog.style.width = type === current ? `${(team.buildT / UNITS[type].build) * 100}%` : '0';
+      prog.style.width = type === current ? `${(team.buildT / game.buildTime('player', type)) * 100}%` : '0';
     }
     if (team.queue.length) {
       const capped = game.alive('player').length >= ECONOMY.maxShips;
@@ -108,7 +108,7 @@ export class Hud {
       const engaged = u.engage && game.distTo(u, u.engage) <= s.range;
       let status = engaged && u.mode !== 'attack' ? 'Engaging' : STATUS[u.mode];
       if (u === game.helm) {
-        const weapon = s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns';
+        const weapon = u.weapons ? u.weapons[u.weaponIdx].name : s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns';
         status = `At the helm · ${u.cooldown > 0 ? 'Reloading…' : `<span style="color:var(--green)">${weapon} ready</span>`}`;
       }
       this.setPanel(`HMS ${u.name}`, '', `<div class="muted">${s.label} · ${status}</div>

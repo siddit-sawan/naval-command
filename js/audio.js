@@ -104,6 +104,30 @@ export const sfx = {
   torpedo(vol) {
     burst({ duration: 1.2, freq: 300, type: 'bandpass', q: 3, sweepTo: 900, volume: vol * 0.5, key: 'torp' });
   },
+  // Two long, low blasts through a muffling filter.
+  foghorn() {
+    if (!ctx || muted) return;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 520;
+    lp.connect(master);
+    for (const start of [0, 2.4]) {
+      const t0 = ctx.currentTime + start;
+      for (const f of [92, 138]) {
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.value = f;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0, t0);
+        gain.gain.linearRampToValueAtTime(0.09, t0 + 0.25);
+        gain.gain.setValueAtTime(0.09, t0 + 1.6);
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + 2.1);
+        osc.connect(gain).connect(lp);
+        osc.start(t0);
+        osc.stop(t0 + 2.2);
+      }
+    }
+  },
   click() { tone([660], { duration: 0.06, volume: 0.08, type: 'triangle' }); },
   order() { tone([520, 780], { duration: 0.08, volume: 0.07, type: 'triangle', gap: 0.05 }); },
   denied() { tone([220, 180], { duration: 0.12, volume: 0.1, type: 'square', gap: 0.1 }); },

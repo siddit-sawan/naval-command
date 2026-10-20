@@ -70,6 +70,7 @@ export function createSky() {
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
+      uMist: { value: 0 },
       uSunDir: { value: SUN_DIR },
       uNoise: { value: NOISE_TEXTURE },
     },
@@ -82,6 +83,7 @@ export function createSky() {
     `,
     fragmentShader: /* glsl */ `
       uniform float uTime;
+      uniform float uMist;
       varying vec3 vDir;
       ${NOISE_GLSL}
       ${SKY_GLSL}
@@ -109,6 +111,8 @@ export function createSky() {
           cloud += vec3(1.0, 0.6, 0.3) * pow(sd, 5.0) * 0.8;
           col = mix(col, cloud, cover * 0.9);
         }
+        // A fog front greys out the sky, most of all near the horizon.
+        col = mix(col, vec3(0.5, 0.6, 0.7), uMist * (0.65 + 0.35 * (1.0 - max(d.y, 0.0))));
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -124,8 +128,9 @@ export function createSky() {
 
   return {
     mesh,
-    update(t, cameraPosition) {
+    update(t, cameraPosition, mist = 0) {
       material.uniforms.uTime.value = t;
+      material.uniforms.uMist.value = mist;
       mesh.position.copy(cameraPosition);
     },
   };

@@ -1,12 +1,17 @@
 import * as THREE from 'three';
-import { createOcean } from './ocean.js';
+import { createOcean, sampleOcean } from './ocean.js';
 import { createSky, SUN_DIR, FOG_DENSITY, HORIZON } from './sky.js';
 import { createScenery } from './scenery.js';
 import { Effects } from './effects.js';
 import { Game, warmupMeshes } from './game.js';
+import { createWeather } from './fog.js';
 import { Hud } from './hud.js';
 import { UNITS, UNIT_ORDER, MAP } from './config.js';
 import { sfx, unlock, setMuted, isMuted } from './audio.js';
+import { sdk, showAd, isAdRunning } from './platform.js';
+import { profile } from './profile.js';
+import { createMenus } from './menu.js';
+import { createBridge } from './bridge.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -58,23 +63,7 @@ const ocean = createOcean(quality.ocean);
 scene.add(ocean.mesh);
 const effects = new Effects(scene, quality.particles);
 const scenery = createScenery(scene, effects);
-
-// ---------- CrazyGames SDK ----------
-// Loaded in the background so the game never waits on a third-party server; calls made before it
-// arrives are queued in order. If it fails to load (offline, blocked), the game runs without it.
-const sdkReady = new Promise((resolve) => {
-  const script = document.createElement('script');
-  script.src = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
-  script.async = true;
-  script.onload = async () => {
-    try { await window.CrazyGames.SDK.init(); resolve(true); } catch { resolve(false); }
-  };
-  script.onerror = () => resolve(false);
-  document.head.appendChild(script);
-});
-function sdk(fn) {
-  sdkReady.then((ok) => { if (ok) try { window.CrazyGames.SDK.game[fn]?.(); } catch { /* not available */ } });
-}
+const weather = createWeather(scene);
 
 // ---------- Camera rig: orbit around a target point on the water ----------
 // Home view looks out to sea with the player's harbor along the bottom of the screen.
@@ -125,16 +114,21 @@ function resetView() {
 // ---------- Game lifecycle ----------
 let state = 'loading';
 let difficulty = 'normal';
-let mode = 'fleet'; // 'fleet' commands the whole navy; 'manual' puts you at the helm of one ship
+let mode = 'fleet'; // 'fleet' commands the whole navy; 'manual' is a team deathmatch at the helm of one ship
+let flagship = 'destroyer'; // the ship class you start in, in manual mode
 let game = null;
 const manual = () => game && game.manual;
 
 function newGame(demo) {
   if (game) game.dispose();
+  Object.assign(shipCam, { mode: 'overview', ship: null });
   game = new Game(scene, effects, {
     demo,
     difficulty,
     manual: mode === 'manual',
+    flagship,
+    weather,
+    livery: profile.data.livery,
     hooks: {
       toast: (text, color) => hud.toast(text, color),
       onGameOver: (winner) => {
@@ -143,7 +137,8 @@ function newGame(demo) {
           return;
         }
         hud.showGameOver(game, winner);
-        if (winner === 'player') sfx.victory(); else sfx.defeat();
+        menus.showMatchReward(game, winner);
+        if (winner === 'player') { sfx.victory(); sdk('happytime'); } else sfx.defeat();
         setState('over');
       },
     },
@@ -159,6 +154,7 @@ function setState(next) {
   $('hud').classList.toggle('hidden', !(next === 'play' || next === 'paused'));
   if (next === 'play') sdk('gameplayStart');
   else if (prev === 'play') sdk('gameplayStop');
+  if (next !== 'play' && document.pointerLockElement) document.exitPointerLock();
   if (next === 'menu') {
     // Menu backdrop: two AI fleets fight it out while the camera drifts around the middle.
     if (prev !== 'loading') newGame(true);
@@ -169,12 +165,17 @@ function setState(next) {
 function startPlay() {
   unlock();
   sfx.click();
+  menus.closeModals();
+  boostReadyAt = BOOST_FIRST;
   newGame(false);
   cam.yaw = Math.atan2(Math.sin(cam.yaw), Math.cos(cam.yaw));
   Object.assign(goal, { x: HOME.x, z: HOME.z, yaw: 0, pitch: DEFAULT_PITCH, dist: 170 });
+  view = 'bridge';
+  look.yaw = 0;
+  look.pitch = -0.08;
   setState('play');
   hud.toast(manual()
-    ? 'WASD to steer, click to fire. Your fleet follows you!'
+    ? 'Team deathmatch: sink all five enemy ships! Lead your shots · 1-3 weapons'
     : 'Capture outposts for income. Destroy the enemy harbor!');
 }
 
@@ -189,8 +190,15 @@ function toggleMute() {
 }
 
 $('playBtn').addEventListener('click', startPlay);
-$('againBtn').addEventListener('click', startPlay);
-$('menuBtn').addEventListener('click', () => setState('menu'));
+// Between matches is the natural break for an ad.
+$('againBtn').addEventListener('click', async () => {
+  await showAd('midgame', adHooks);
+  startPlay();
+});
+$('menuBtn').addEventListener('click', async () => {
+  await showAd('midgame', adHooks);
+  setState('menu');
+});
 $('resumeBtn').addEventListener('click', () => setState('play'));
 $('quitBtn').addEventListener('click', () => setState('menu'));
 for (const btn of document.querySelectorAll('#diffRow .diff')) {
@@ -203,6 +211,13 @@ for (const btn of document.querySelectorAll('#modeRow .diff')) {
   btn.addEventListener('click', () => {
     mode = btn.dataset.mode;
     document.querySelectorAll('#modeRow .diff').forEach((b) => b.classList.toggle('active', b === btn));
+    $('shipRow').classList.toggle('hidden', mode !== 'manual');
+  });
+}
+for (const btn of document.querySelectorAll('#shipRow .diff')) {
+  btn.addEventListener('click', () => {
+    flagship = btn.dataset.ship;
+    document.querySelectorAll('#shipRow .diff').forEach((b) => b.classList.toggle('active', b === btn));
   });
 }
 
@@ -233,6 +248,57 @@ function build(type) {
     sfx.click();
   }
 }
+
+// ---------- Ads, rewards and menus ----------
+// The game freezes and goes quiet while an ad plays.
+let adPause = false;
+let mutedBeforeAd = false;
+const adHooks = {
+  onStart() {
+    adPause = true;
+    mutedBeforeAd = isMuted();
+    setMuted(true);
+    if (document.pointerLockElement) document.exitPointerLock();
+  },
+  onEnd() {
+    adPause = false;
+    setMuted(mutedBeforeAd);
+    hud.setMuted(isMuted());
+  },
+};
+const menus = createMenus({
+  adHooks,
+  // Repaint the menu's backdrop fleet so the new livery shows straight away.
+  onLiveryChange: () => { if (state === 'menu') newGame(true); },
+});
+const wheelhouse = createBridge(scene);
+
+// In-match boost: watch an ad for gold, available a little while into the battle and then on a cooldown.
+const BOOST_GOLD = 250;
+const BOOST_FIRST = 45;
+const BOOST_COOLDOWN = 150;
+let boostReadyAt = BOOST_FIRST;
+const boostBtn = $('boostBtn');
+function updateBoost() {
+  const wait = Math.ceil(boostReadyAt - game.time);
+  boostBtn.disabled = wait > 0 || !!game.over;
+  boostBtn.textContent = wait > 0 ? `📺 ${Math.floor(wait / 60)}:${String(wait % 60).padStart(2, '0')}`
+    : game.deathmatch ? '📺 Repair hull' : `📺 +${BOOST_GOLD} ⛃`;
+}
+boostBtn.addEventListener('click', async () => {
+  if (state !== 'play' || game.time < boostReadyAt) return;
+  const g = game;
+  if (!(await showAd('rewarded', adHooks)) || g !== game || g.over) return;
+  boostReadyAt = g.time + BOOST_COOLDOWN;
+  if (g.deathmatch) {
+    if (g.helm) g.helm.hp = g.helm.maxHp;
+    hud.toast('Damage control: hull fully repaired', '#4cd68a');
+  } else {
+    g.teams.player.gold += BOOST_GOLD;
+    hud.toast(`Reinforcement funds: +${BOOST_GOLD} gold`, '#f0b429');
+  }
+  sfx.built();
+});
 
 const hud = new Hud({
   onBuild: build,
@@ -323,36 +389,338 @@ function helmClick(clientX, clientY) {
     if (own !== game.helm) takeHelm(own);
     return;
   }
-  const target = pickShip(clientX, clientY, 'enemy') || pickEnemyHarbor(clientX, clientY);
+  const target = pickShip(clientX, clientY, 'enemy');
   const aim = target || (waterPoint(clientX, clientY) && { x: hit.x, z: hit.z });
-  if (aim) helmShoot(aim);
+  // Clicking an enemy directly counts as a missile lock in the chase view.
+  if (aim) helmShoot(aim, target);
 }
 
-function helmShoot(aim) {
-  const err = game.helmFire(aim);
+function helmShoot(aim, lockedOn = null) {
+  const err = game.helmFire(aim, lockedOn);
   if (err && err !== 'Reloading') hud.toast(err, '#ff5a4f');
   if (err) sfx.denied();
 }
 
 // Right-click: sail the helm ship to that point until a steering key is pressed.
 function helmCommand(clientX, clientY) {
-  const target = pickShip(clientX, clientY, 'enemy') || pickEnemyHarbor(clientX, clientY);
-  if (target) { helmShoot(target); return; }
+  const target = pickShip(clientX, clientY, 'enemy');
+  if (target) { helmShoot(target, target); return; }
   if (!game.helm || !waterPoint(clientX, clientY)) return;
   game.order([game.helm], { type: 'move', x: hit.x, z: hit.z });
   effects.ring(hit.x, hit.z, { life: 0.8, grow: 5 });
   sfx.order();
 }
 
+// ---------- First-person bridge view (manual mode) ----------
+// The camera rides on your ship's bridge. With the pointer locked the mouse looks around and a click
+// fires at the crosshair; without it (touch, or lock refused) drag to look and tap to fire.
+let view = 'bridge'; // or 'chase'
+const look = { yaw: 0, pitch: -0.08 };
+let zoomFov = FOV;
+let currentFov = FOV;
+let lockFailed = false;
+let lockLostAt = -1e9;
+const lookDir = new THREE.Vector3();
+const eye = new THREE.Vector3();
+const locked = () => document.pointerLockElement === canvas;
+const bridge = () => manual() && view === 'bridge' && !!game.helm && (state === 'play' || state === 'paused');
+
+// The look direction is relative to the ship (+x is the bow), so the view pitches and rolls with the
+// hull and the wheelhouse around it.
+const shipUp = new THREE.Vector3();
+function updateLookDir(h) {
+  const q = h.mesh.quaternion;
+  lookDir.set(Math.cos(look.yaw) * Math.cos(look.pitch), Math.sin(look.pitch), Math.sin(look.yaw) * Math.cos(look.pitch))
+    .applyQuaternion(q);
+  shipUp.set(0, 1, 0).applyQuaternion(q);
+}
+
+// Called after the simulation has moved the ship, so the view never lags a frame behind the hull.
+function placeBridgeCamera(h) {
+  eye.copy(h.mesh.userData.eye).applyMatrix4(h.mesh.matrixWorld);
+  updateLookDir(h);
+  camera.position.copy(eye);
+  camera.up.copy(shipUp);
+  camera.lookAt(eye.x + lookDir.x, eye.y + lookDir.y, eye.z + lookDir.z);
+  // Aiming rays are cast before the next render, so the matrix must be current now.
+  camera.updateMatrixWorld();
+  // The turrets train where the captain is looking (only on the ship you steer).
+  if (h !== game.helm) return;
+  const f = Math.hypot(lookDir.x, lookDir.z) || 1;
+  h.aimPoint = { x: h.x + (lookDir.x / f) * 60, z: h.z + (lookDir.z / f) * 60 };
+}
+
+// The wheelhouse sits right around the eye, so the bridge view needs a closer near plane.
+function setNear(n) {
+  if (camera.near === n) return;
+  camera.near = n;
+  camera.updateProjectionMatrix();
+}
+
+function setFov(f) {
+  if (Math.abs(f - currentFov) < 0.01) return;
+  currentFov = f;
+  camera.fov = f;
+  camera.updateProjectionMatrix();
+  effects.setScale(renderer.getDrawingBufferSize(new THREE.Vector2()).y, f);
+}
+
+function turnLook(mx, my) {
+  const k = 0.0024 * (zoomFov / FOV);
+  look.yaw = Math.atan2(Math.sin(look.yaw + mx * k), Math.cos(look.yaw + mx * k));
+  look.pitch = THREE.MathUtils.clamp(look.pitch - my * k, -0.6, 0.45);
+}
+
+// What the crosshair is on: an enemy, the enemy harbor, a point on the water, or (above the
+// horizon) a point far off in that direction.
+// The point on the crosshair line the guns converge on: at an enemy ship under it, on the water, or
+// far off above the horizon. Shells fly straight down this line and gravity does the rest, so leading
+// a moving ship and holding a little high at long range are up to you. range: horizontal distance.
+function crosshairAim() {
+  const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+  const target = pickShip(cx, cy, 'enemy');
+  const flat = Math.hypot(lookDir.x, lookDir.z) || 1;
+  let along = 2000;
+  if (target) along = Math.hypot(target.x - eye.x, target.z - eye.z) / flat;
+  else if (lookDir.y < -0.002) along = -eye.y / lookDir.y;
+  return {
+    x: eye.x + lookDir.x * along, y: eye.y + lookDir.y * along, z: eye.z + lookDir.z * along,
+    range: along * flat, sky: !target && lookDir.y >= -0.002,
+  };
+}
+
+function setView(next) {
+  view = next;
+  if (view === 'chase') {
+    if (locked()) document.exitPointerLock();
+    Object.assign(goal, { pitch: 0.32, dist: 85 });
+  }
+  if (game.helm) game.helm.aimPoint = null;
+  hud.toast(view === 'bridge' ? 'Bridge view' : 'Chase view', '#cfe0ec');
+}
+
+document.addEventListener('pointerlockchange', () => {
+  if (locked()) return;
+  lockLostAt = performance.now();
+  // Esc releases the mouse; treat it as a pause like any first-person game (but not when an ad took it).
+  if (state === 'play' && bridge() && !isAdRunning()) setState('paused');
+});
+document.addEventListener('pointerlockerror', () => { lockFailed = true; });
+
+function requestLock() {
+  try {
+    const r = canvas.requestPointerLock();
+    if (r && r.catch) r.catch(() => { lockFailed = true; });
+  } catch {
+    lockFailed = true;
+  }
+}
+
+const crosshair = $('crosshair');
+const xhInfo = $('xhInfo');
+const xhHint = $('xhHint');
+// Missile lock: keep the crosshair on the same enemy ship, in range, for the weapon's lock time.
+const lock = { target: null, t: 0 };
+function lockedTarget() {
+  const h = game.helm;
+  const w = h && h.weapons[h.weaponIdx];
+  return w && w.kind === 'missile' && lock.target && lock.t >= w.lock ? lock.target : null;
+}
+
+function updateCrosshair(dt) {
+  const fp = bridge();
+  crosshair.classList.toggle('hidden', !fp);
+  if (!fp) return;
+  const h = game.helm;
+  const w = h.weapons[h.weaponIdx];
+  const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+  const target = pickShip(cx, cy, 'enemy');
+  const aim = crosshairAim();
+  const dist = aim.range;
+  const ready = h.cooldown <= 0;
+  let status = ready ? 'READY' : `RELOAD ${h.cooldown.toFixed(1)}s`;
+  let good = false, far = false;
+  if (w.kind === 'missile') {
+    const valid = target && game.distTo(h, target) <= w.range;
+    if (valid && lock.target === target) lock.t += state === 'play' ? dt : 0;
+    else { lock.target = valid ? target : null; lock.t = 0; }
+    if (lock.target && lock.t >= w.lock) { status = ready ? 'LOCKED · FIRE' : `LOCKED · ${status}`; good = true; }
+    else if (lock.target) status = `LOCKING ${Math.round((lock.t / w.lock) * 100)}%`;
+    else far = !!target;
+  } else {
+    lock.target = null;
+    if (w.kind === 'depth') status = ready ? 'DROP ASTERN' : status;
+    else {
+      far = !!target && dist > w.range;
+      good = !!target && !far;
+      const eta = dist / (w.kind === 'torpedo' ? w.speed : w.velocity);
+      status = aim.sky ? `RNG — · ${status}` : `RNG ${Math.round(dist)} · ETA ${eta.toFixed(1)}s · ${status}`;
+    }
+  }
+  crosshair.classList.toggle('lock', good);
+  crosshair.classList.toggle('far', far);
+  const zoom = FOV / zoomFov;
+  xhInfo.textContent = [w.name.toUpperCase(), status, zoom > 1.1 ? '×' + zoom.toFixed(1) : ''].filter(Boolean).join('  ·  ');
+  xhHint.classList.toggle('hidden', locked() || lockFailed || 'ontouchstart' in window);
+}
+
+// ---------- Deathmatch HUD: weapon selector and score ----------
+const weaponPanel = $('weapons');
+let panelFor = null;
+function selectWeapon(i) {
+  const w = game.selectWeapon(i);
+  if (!w) return;
+  sfx.click();
+  hud.toast(w.name, '#cfe0ec');
+  updateWeaponPanel();
+}
+function updateWeaponPanel() {
+  const h = game.deathmatch ? game.helm : null;
+  weaponPanel.classList.toggle('hidden', !h);
+  if (!h) return;
+  if (panelFor !== h) {
+    panelFor = h;
+    weaponPanel.innerHTML = h.weapons.map((w, i) => `<button class="weapon-btn" data-i="${i}"><span class="key">${i + 1}</span>
+      <span class="name">${w.name}</span><span class="desc">${w.kind === 'depth' ? 'Drops astern' : `Range ${w.range}`} · ${w.damage} dmg</span><div class="prog"></div></button>`).join('');
+    for (const b of weaponPanel.querySelectorAll('.weapon-btn')) b.addEventListener('click', () => selectWeapon(+b.dataset.i));
+  }
+  weaponPanel.querySelectorAll('.weapon-btn').forEach((b, i) => {
+    const w = h.weapons[i];
+    b.classList.toggle('active', i === h.weaponIdx);
+    b.querySelector('.prog').style.width = `${(1 - h.wcool[i] / w.reload) * 100}%`;
+  });
+}
+const scoreEl = $('score');
+function updateScore() {
+  if (!game.deathmatch) return;
+  const mine = game.alive('player').length, theirs = game.alive('enemy').length;
+  scoreEl.innerHTML = `<span class="you">⚓ ${mine}</span> vs <span class="foe">${theirs} ⚓</span> · Sunk ${game.teams.player.kills}`;
+}
+
+// ---------- Fleet mode: cameras on a selected ship ----------
+// Overview is the normal strategy camera. Chase, Orbit and Waterline follow the ship from outside
+// (drag or Q/E/R/F to swing round, wheel to zoom); Bridge puts you in its wheelhouse (drag to look,
+// wheel for binoculars). The ship keeps following your fleet orders.
+const SHIP_CAMS = ['overview', 'chase', 'orbit', 'waterline', 'bridge'];
+const shipCam = { mode: 'overview', ship: null, yaw: 0, pitch: 0, zoom: 1, orbit: 0, pos: new THREE.Vector3(), fresh: true };
+const shipCamActive = () => !!game && !manual() && shipCam.mode !== 'overview' && !!shipCam.ship
+  && shipCam.ship.alive && (state === 'play' || state === 'paused');
+
+function setShipCam(mode, ship = shipCam.ship) {
+  if (mode !== 'overview' && (!ship || !ship.alive)) {
+    hud.toast('Select one of your ships first', '#ff5a4f');
+    return;
+  }
+  const leaving = shipCam.ship;
+  Object.assign(shipCam, { mode, ship: mode === 'overview' ? null : ship, yaw: 0, pitch: 0, zoom: 1, fresh: true });
+  shipCam.orbit = ship ? ship.heading + Math.PI * 0.75 : 0;
+  if (mode === 'bridge') Object.assign(look, { yaw: 0, pitch: -0.08 });
+  if (mode === 'overview' && leaving) lookAt(leaving.x, leaving.z);
+  zoomFov = FOV;
+  updateCamBar();
+}
+
+function cycleShipCam() {
+  const ship = shipCamActive() ? shipCam.ship : selectedShips()[0];
+  const i = SHIP_CAMS.indexOf(shipCam.mode);
+  setShipCam(ship ? SHIP_CAMS[(i + 1) % SHIP_CAMS.length] : 'overview', ship);
+}
+
+function swingShipCam(dx, dy) {
+  if (shipCam.mode === 'bridge') { turnLook(dx, dy); return; }
+  shipCam.yaw -= dx * 0.006;
+  shipCam.pitch = THREE.MathUtils.clamp(shipCam.pitch + dy * 0.004, -0.3, 1);
+}
+
+const camWant = new THREE.Vector3();
+function placeShipCamera(dt) {
+  const sh = shipCam.ship, st = sh.stats, zoom = shipCam.zoom;
+  const fx = Math.cos(sh.heading), fz = Math.sin(sh.heading);
+  const tgt = { x: sh.x, y: st.size * 0.12 + 2, z: sh.z };
+  let yaw, dist, height;
+  if (shipCam.mode === 'chase') {
+    yaw = sh.heading + Math.PI + shipCam.yaw;
+    dist = (st.size * 1.3 + 16) * zoom;
+    height = (st.size * 0.35 + 5) * zoom + shipCam.pitch * 30;
+    tgt.x += fx * st.size * 0.8;
+    tgt.z += fz * st.size * 0.8;
+  } else if (shipCam.mode === 'orbit') {
+    shipCam.orbit += dt * 0.22;
+    yaw = shipCam.orbit + shipCam.yaw;
+    dist = (st.size * 1.6 + 22) * zoom;
+    height = (st.size * 0.55 + 9) * zoom + shipCam.pitch * 30;
+  } else {
+    // Waterline: low off the bow quarter, looking up at the hull.
+    yaw = sh.heading + Math.PI * 0.3 + shipCam.yaw;
+    dist = (st.size * 0.85 + 9) * zoom;
+    height = 1.6 + shipCam.pitch * 12;
+    tgt.y = st.size * 0.18 + 2.5;
+  }
+  camWant.set(sh.x + Math.cos(yaw) * dist, 0, sh.z + Math.sin(yaw) * dist);
+  camWant.y = Math.max(height, sampleOcean(camWant.x, camWant.z, time) + 1.2);
+  if (shipCam.fresh) shipCam.pos.copy(camWant);
+  else shipCam.pos.lerp(camWant, 1 - Math.exp(-dt * 5));
+  shipCam.fresh = false;
+  camera.position.copy(shipCam.pos);
+  camera.lookAt(tgt.x, tgt.y, tgt.z);
+  camera.updateMatrixWorld();
+  // Keep the strategy camera over the ship so going back to Overview is seamless.
+  lookAt(sh.x, sh.z);
+}
+
+const camBar = $('camBar');
+for (const btn of camBar.querySelectorAll('button')) {
+  btn.addEventListener('click', () => {
+    sfx.click();
+    setShipCam(btn.dataset.cam, shipCamActive() && !selectedShips().length ? shipCam.ship : selectedShips()[0] || shipCam.ship);
+  });
+}
+function updateCamBar() {
+  const show = !!game && !manual() && (state === 'play' || state === 'paused') && (selectedShips().length > 0 || shipCamActive());
+  camBar.classList.toggle('hidden', !show);
+  for (const btn of camBar.querySelectorAll('button')) btn.classList.toggle('active', btn.dataset.cam === shipCam.mode);
+}
+
+// The bridge screens of a ship you aren't steering show its own engine state.
+const shipInput = (sh) => ({ throttle: sh.speed > 0.5 ? 1 : sh.speed < -0.5 ? -1 : 0, rudder: 0 });
+
+// Edge scrolling: the strategy camera pans when the mouse rests against a screen edge.
+const mouse = { x: 0, y: 0, inside: false };
+window.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  mouse.x = e.clientX;
+  mouse.y = e.clientY;
+  mouse.inside = true;
+});
+document.documentElement.addEventListener('mouseleave', () => { mouse.inside = false; });
+window.addEventListener('blur', () => { mouse.inside = false; });
+const EDGE = 8;
+
 // ---------- Keyboard ----------
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Escape') { togglePause(); return; }
+  if (e.code === 'Escape' && state === 'play' && shipCamActive()) {
+    setShipCam('overview');
+    return;
+  }
+  if (e.code === 'Escape') {
+    // Leaving pointer lock already paused the game; don't immediately unpause it again.
+    if (performance.now() - lockLostAt > 300) togglePause();
+    return;
+  }
   if (state !== 'play') return;
+  if (e.code === 'KeyV' && !e.repeat) {
+    if (manual()) setView(view === 'bridge' ? 'chase' : 'bridge');
+    else cycleShipCam();
+    return;
+  }
   if (manual() && (e.code === 'Tab' || e.code === 'Space')) {
     e.preventDefault();
     if (e.repeat) return;
-    if (e.code === 'Space') helmShoot(null);
+    if (e.code === 'Space') {
+      if (bridge()) helmShoot(crosshairAim(), lockedTarget());
+      else helmShoot(null, game.findTarget(game.helm, game.helm.weapons[game.helm.weaponIdx].range));
+    }
     else if (game.cycleHelm()) takeHelm(game.helm);
     return;
   }
@@ -363,10 +731,18 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   const digit = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
-  if (digit >= 0 && !e.repeat) { build(UNIT_ORDER[digit]); return; }
+  if (digit >= 0 && !e.repeat) {
+    if (game.deathmatch) selectWeapon(digit);
+    else build(UNIT_ORDER[digit]);
+    return;
+  }
   if (e.code === 'KeyM' && !e.repeat) { toggleMute(); return; }
   if (e.code === 'KeyH') lookAt(HOME.x, HOME.z);
-  if (e.code === 'KeyC') resetView();
+  if (e.code === 'KeyC') {
+    if (bridge() || (shipCamActive() && shipCam.mode === 'bridge')) Object.assign(look, { yaw: 0, pitch: -0.08 });
+    else if (shipCamActive()) Object.assign(shipCam, { yaw: 0, pitch: 0 });
+    else resetView();
+  }
   if (e.code === 'Space') {
     e.preventDefault();
     const sel = selectedShips();
@@ -384,12 +760,47 @@ function handleKeys(dt) {
     // The keys drive your ship instead of the camera, which follows it.
     game.helmInput.throttle = has('KeyW', 'ArrowUp') ? 1 : has('KeyS', 'ArrowDown') ? -0.35 : 0;
     game.helmInput.rudder = (has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0);
-    if (game.helm) lookAt(game.helm.x, game.helm.z);
+    const h = game.helm;
+    if (h) {
+      lookAt(h.x, h.z);
+      // Chase view swings round behind the ship.
+      if (view === 'chase') {
+        const behind = Math.atan2(-Math.cos(h.heading), -Math.sin(h.heading));
+        goal.yaw = cam.yaw + Math.atan2(Math.sin(behind - cam.yaw), Math.cos(behind - cam.yaw));
+      }
+    }
+    if (bridge()) {
+      if (has('KeyQ')) turnLook(-dt * 600, 0);
+      if (has('KeyE')) turnLook(dt * 600, 0);
+      if (has('KeyR')) turnLook(0, -dt * 300);
+      if (has('KeyF')) turnLook(0, dt * 300);
+      return;
+    }
   } else {
-    if (has('KeyW', 'ArrowUp')) pan(0, speed);
-    if (has('KeyS', 'ArrowDown')) pan(0, -speed);
-    if (has('KeyA', 'ArrowLeft')) pan(-speed, 0);
-    if (has('KeyD', 'ArrowRight')) pan(speed, 0);
+    const panKey = has('KeyW', 'ArrowUp', 'KeyS', 'ArrowDown', 'KeyA', 'ArrowLeft', 'KeyD', 'ArrowRight');
+    if (shipCamActive()) {
+      // Panning hands control back to the strategy camera.
+      if (panKey) setShipCam('overview');
+      else {
+        if (has('KeyQ')) swingShipCam(-dt * 600, 0);
+        if (has('KeyE')) swingShipCam(dt * 600, 0);
+        if (has('KeyR')) swingShipCam(0, -dt * 300);
+        if (has('KeyF')) swingShipCam(0, dt * 300);
+        return;
+      }
+    }
+    const fast = has('ShiftLeft', 'ShiftRight') ? 2.5 : 1;
+    if (has('KeyW', 'ArrowUp')) pan(0, speed * fast);
+    if (has('KeyS', 'ArrowDown')) pan(0, -speed * fast);
+    if (has('KeyA', 'ArrowLeft')) pan(-speed * fast, 0);
+    if (has('KeyD', 'ArrowRight')) pan(speed * fast, 0);
+    if (mouse.inside && !pointers.size && document.hasFocus()) {
+      const w = window.innerWidth, h = window.innerHeight;
+      if (mouse.x < EDGE) pan(-speed * fast, 0);
+      else if (mouse.x > w - EDGE) pan(speed * fast, 0);
+      if (mouse.y < EDGE) pan(0, speed * fast);
+      else if (mouse.y > h - EDGE) pan(0, -speed * fast);
+    }
   }
   if (has('KeyQ')) rotate(-dt * 1.4, 0);
   if (has('KeyE')) rotate(dt * 1.4, 0);
@@ -398,14 +809,30 @@ function handleKeys(dt) {
 }
 
 // ---------- Pointer input ----------
-// Mouse: left click/drag selects, right click moves/attacks, right drag pans,
-//        middle drag (or Alt + left drag on a touchpad) orbits and tilts the camera.
+// Mouse: left click/drag selects, right click moves/attacks, right drag (or Alt + left drag on a
+//        touchpad) orbits and tilts the camera, middle drag pans.
 // Touch: tap a ship to select, tap water/enemy to command, drag to pan, pinch to zoom,
 //        twist two fingers to rotate, slide two fingers up/down to tilt.
 canvas.addEventListener('wheel', (e) => {
   if (state !== 'play') return;
   e.preventDefault();
-  goal.dist = THREE.MathUtils.clamp(goal.dist * Math.exp(e.deltaY * 0.001), 40, 380);
+  if (bridge() || (shipCamActive() && shipCam.mode === 'bridge')) {
+    // Binoculars.
+    zoomFov = THREE.MathUtils.clamp(zoomFov * Math.exp(e.deltaY * 0.001), 14, FOV);
+    return;
+  }
+  if (shipCamActive()) {
+    shipCam.zoom = THREE.MathUtils.clamp(shipCam.zoom * Math.exp(e.deltaY * 0.001), 0.45, 3);
+    return;
+  }
+  // Zoom toward whatever is under the cursor, like a map.
+  const before = !manual() && waterPoint(e.clientX, e.clientY) ? { x: hit.x, z: hit.z } : null;
+  const old = goal.dist;
+  goal.dist = THREE.MathUtils.clamp(goal.dist * Math.exp(e.deltaY * 0.001), 40, 520);
+  if (before) {
+    const k = 1 - goal.dist / old;
+    lookAt(goal.x + (before.x - goal.x) * k, goal.z + (before.z - goal.z) * k);
+  }
 }, { passive: false });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -417,9 +844,23 @@ let boxing = false;
 canvas.addEventListener('pointerdown', (e) => {
   if (state !== 'play') return;
   unlock();
+  if (bridge()) {
+    if (locked()) {
+      if (e.button === 0) helmShoot(crosshairAim(), lockedTarget());
+      else if (e.button === 2) zoomFov = zoomFov < FOV * 0.7 ? FOV : FOV / 3;
+      return;
+    }
+    if (e.pointerType !== 'touch' && !lockFailed && e.button === 0) {
+      requestLock();
+      return;
+    }
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, moved: 0, bridge: true });
+    return;
+  }
   if (e.button === 1) e.preventDefault(); // no browser auto-scroll on middle click
   canvas.setPointerCapture(e.pointerId);
-  const orbit = e.pointerType !== 'touch' && (e.button === 1 || (e.button === 0 && e.altKey));
+  const orbit = e.pointerType !== 'touch' && (e.button === 2 || (e.button === 0 && e.altKey));
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button, moved: 0, touch: e.pointerType === 'touch', orbit });
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -438,7 +879,19 @@ function updateHover(cx, cy) {
 }
 
 canvas.addEventListener('pointermove', (e) => {
+  if (state === 'play' && bridge() && locked()) {
+    turnLook(e.movementX, e.movementY);
+    return;
+  }
   const p = pointers.get(e.pointerId);
+  if (p && p.bridge) {
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    p.moved += Math.abs(dx) + Math.abs(dy);
+    turnLook(-dx * 1.5, -dy * 1.5);
+    return;
+  }
   if (!p) {
     if (state === 'play' && e.pointerType !== 'touch') updateHover(e.clientX, e.clientY);
     return;
@@ -448,12 +901,16 @@ canvas.addEventListener('pointermove', (e) => {
   p.y = e.clientY;
   p.moved += Math.abs(dx) + Math.abs(dy);
 
+  if (pointers.size === 1 && shipCamActive() && (p.orbit || p.button === 0 || p.touch)) {
+    if (p.moved > 4) swingShipCam(dx * (shipCam.mode === 'bridge' ? -1.5 : 1), dy * (shipCam.mode === 'bridge' ? -1.5 : 1));
+    return;
+  }
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
     const angle = Math.atan2(b.y - a.y, b.x - a.x);
     if (pinchStart > 0) {
-      goal.dist = THREE.MathUtils.clamp(goal.dist * (pinchStart / d), 40, 380);
+      goal.dist = THREE.MathUtils.clamp(goal.dist * (pinchStart / d), 40, 520);
       // Twist to rotate; both fingers sliding vertically tilts.
       rotate(-Math.atan2(Math.sin(angle - pinchAngle), Math.cos(angle - pinchAngle)), dy * 0.002);
     }
@@ -479,14 +936,21 @@ const endPointer = (e) => {
   const p = pointers.get(e.pointerId);
   if (!p) return;
   pointers.delete(e.pointerId);
+  if (p.bridge) {
+    if (e.type !== 'pointercancel' && state === 'play' && p.moved < 10 && game.helm) helmClick(e.clientX, e.clientY);
+    return;
+  }
   const wasPinch = pinchStart > 0;
   if (pointers.size < 2) pinchStart = 0;
-  if (e.type === 'pointercancel' || wasPinch || p.orbit || state !== 'play') {
+  // A right-drag that rotated the camera isn't a right-click command; a plain right-click still is.
+  if (e.type === 'pointercancel' || wasPinch || (p.orbit && (p.button !== 2 || p.moved >= 6)) || state !== 'play') {
     boxing = false;
     selBox.classList.add('hidden');
     return;
   }
 
+  // A drag that swung a ship camera isn't a click.
+  if (shipCamActive() && p.moved >= 6 && (p.button === 0 || p.touch)) return;
   if (manual()) {
     if (p.button === 0 && p.moved < (p.touch ? 10 : 6)) helmClick(e.clientX, e.clientY);
     else if (!p.touch && p.button === 2 && p.moved < 6) helmCommand(e.clientX, e.clientY);
@@ -518,6 +982,14 @@ const endPointer = (e) => {
   }
 };
 canvas.addEventListener('pointerup', endPointer);
+// Double-click one of your ships to ride along with it.
+canvas.addEventListener('dblclick', (e) => {
+  if (state !== 'play' || manual()) return;
+  const ship = pickShip(e.clientX, e.clientY, 'player');
+  if (!ship) return;
+  setSelection([ship]);
+  setShipCam('chase', ship);
+});
 canvas.addEventListener('pointercancel', endPointer);
 
 // ---------- Loop ----------
@@ -526,7 +998,7 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  effects.setScale(renderer.getDrawingBufferSize(new THREE.Vector2()).y, FOV);
+  effects.setScale(renderer.getDrawingBufferSize(new THREE.Vector2()).y, camera.fov);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -573,27 +1045,62 @@ function frame() {
   const rawDt = clock.getDelta();
   adaptResolution(rawDt);
   const realDt = Math.min(rawDt, 0.1);
-  const dt = state === 'paused' ? 0 : realDt;
+  const dt = state === 'paused' || adPause ? 0 : realDt;
   time += dt;
 
   if (state === 'play') handleKeys(realDt);
   else if (state === 'menu' || state === 'loading') goal.yaw += realDt * 0.035;
 
   applyCamera(realDt);
+  if (game && shipCam.mode !== 'overview' && !shipCamActive() && !manual()) setShipCam('overview');
+  const fp = !!game && bridge();
+  const fleetCam = shipCamActive();
+  // The ship whose wheelhouse we're in: your helm in manual mode, or a fleet ship's Bridge camera.
+  const onBridge = fp ? game.helm : fleetCam && shipCam.mode === 'bridge' ? shipCam.ship : null;
   // Compass needle points north relative to the current view.
-  const needleDeg = Math.round(THREE.MathUtils.radToDeg(cam.yaw));
+  let viewYaw = cam.yaw;
+  if (onBridge) {
+    const a = onBridge.heading + look.yaw;
+    viewYaw = Math.atan2(-Math.cos(a), -Math.sin(a));
+  } else if (fleetCam) {
+    const d = camera.getWorldDirection(camWant);
+    viewYaw = Math.atan2(-d.x, -d.z);
+  }
+  const needleDeg = Math.round(THREE.MathUtils.radToDeg(viewYaw));
   if (needleDeg !== lastNeedle) {
     lastNeedle = needleDeg;
     compassNeedle.style.transform = `rotate(${needleDeg}deg)`;
   }
-  const focus = { x: cam.x, z: cam.z };
+  const followed = onBridge || (fleetCam ? shipCam.ship : null);
+  const focus = followed ? { x: followed.x, z: followed.z } : { x: cam.x, z: cam.z };
   ocean.update(time, focus);
-  sky.update(time, camera.position);
   scenery.update(time, dt, focus);
   if (game) {
+    // The followed ship hides its own selection ring and health bar from up close.
+    game.fpShip = followed;
     game.listener = focus;
     game.update(time, dt, camera);
   }
+  if (onBridge && onBridge.alive) placeBridgeCamera(onBridge);
+  else if (fleetCam) placeShipCamera(realDt);
+  const inBridge = !!onBridge && onBridge.alive;
+  if (!inBridge) camera.up.set(0, 1, 0);
+  setNear(inBridge ? 0.06 : 0.5);
+  document.body.classList.toggle('bridge', inBridge);
+  document.body.classList.toggle('tdm', !!game && game.deathmatch && (state === 'play' || state === 'paused'));
+  if (inBridge) wheelhouse.update(true, onBridge, eye, game, onBridge === game.helm ? game.helmInput : shipInput(onBridge), time, realDt);
+  else wheelhouse.update(false);
+  setFov(inBridge ? zoomFov : FOV);
+
+  // Fog: thicker in a fog front, and thickest when the camera is down inside a bank.
+  weather.update(time);
+  const p = camera.position;
+  const density = weather.density(p.x, p.z, p.y);
+  scene.fog.density = density;
+  ocean.setFog(weather.banks, density);
+  weather.setFogDensity(density);
+  sky.update(time, p, weather.mist);
+  sun.intensity = 2.4 * (1 - 0.45 * weather.mist);
   effects.update(time, dt);
 
   hudTimer -= realDt;
@@ -601,6 +1108,11 @@ function frame() {
     hudTimer = 0.1;
     hud.update(game, selectedShips());
     hud.drawMinimap(game, viewCorners());
+    updateCrosshair(0.1);
+    updateBoost();
+    updateWeaponPanel();
+    updateScore();
+    updateCamBar();
   }
   renderer.render(scene, camera);
 }
@@ -644,4 +1156,4 @@ precompile().then(() => {
 })();
 
 // Exposed for debugging from the browser console.
-window.navalCommand = { get game() { return game; }, renderer, scene, camera, UNITS, get pixelRatio() { return pixelRatio; } };
+window.navalCommand = { get game() { return game; }, goal, renderer, scene, camera, UNITS, get pixelRatio() { return pixelRatio; } };
