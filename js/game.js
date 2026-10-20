@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS } from './config.js';
+import { UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS, ESCORT_RANGE } from './config.js';
 import { makeShipModel, makeHarbor, makeOutpost } from './models.js';
 import { ISLANDS, sampleOcean } from './ocean.js';
 import { Effects } from './effects.js';
@@ -75,11 +75,16 @@ export function warmupMeshes() {
 export class Game {
   /**
    * hooks: { toast(text, color), onGameOver(winner) }. In demo mode both fleets are AI-controlled and silent.
+   * In manual mode the player steers one ship (the helm) directly and the rest of the fleet escorts it.
    */
-  constructor(scene, effects, { difficulty = 'normal', demo = false, hooks = {} } = {}) {
+  constructor(scene, effects, { difficulty = 'normal', demo = false, manual = false, hooks = {} } = {}) {
     this.scene = scene;
     this.effects = effects;
     this.demo = demo;
+    this.manual = manual && !demo;
+    this.helm = null;
+    this.helmInput = { throttle: 0, rudder: 0 };
+    this.escortT = 0;
     this.diff = DIFFICULTY[difficulty];
     this.hooks = { toast() {}, onGameOver() {}, ...hooks };
     this.root = new THREE.Group();
@@ -126,6 +131,7 @@ export class Game {
     for (const team of ['player', 'enemy']) {
       for (const type of ['destroyer', 'corvette']) this.spawn(team, type, true);
     }
+    if (this.manual) this.setHelm(this.alive('player')[0]);
   }
 
   dispose() {
@@ -207,6 +213,62 @@ export class Game {
     });
   }
 
+  // ---------- Manual mode ----------
+
+  setHelm(u) {
+    for (const s of this.alive('player')) s.selected = false;
+    this.helm = u && u.alive ? u : null;
+    if (!this.helm) return;
+    Object.assign(this.helm, { selected: true, mode: 'idle', target: null, attackTarget: null, engage: null });
+  }
+
+  // Take the next ship in the fleet; returns it, or null if there is none.
+  cycleHelm() {
+    const fleet = this.alive('player');
+    if (!fleet.length) return null;
+    const i = fleet.indexOf(this.helm);
+    this.setHelm(fleet[(i + 1) % fleet.length]);
+    return this.helm;
+  }
+
+  // Fire the helm ship at an enemy, a point on the water, or (null) the nearest enemy in range.
+  // Returns an error message, or null when the shot went out.
+  helmFire(aim) {
+    const u = this.helm;
+    if (!u || !u.alive) return 'No ship at the helm';
+    if (u.cooldown > 0) return 'Reloading';
+    const s = u.stats;
+    let target = aim && aim.alive !== undefined ? aim : null;
+    if (!aim) target = this.findTarget(u, s.range);
+    if (!aim && !target) return 'No target in range';
+    if (target && this.distTo(u, target) > s.range) {
+      aim = { x: target.x, z: target.z };
+      target = null;
+    }
+    if (!target) {
+      // Shots at open water fly as far as the guns reach, no further.
+      const dx = aim.x - u.x, dz = aim.z - u.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const k = Math.min(1, s.range / d);
+      target = { x: u.x + dx * k, z: u.z + dz * k };
+    }
+    this.fire(u, target);
+    u.cooldown = s.reload;
+    if (target.alive !== undefined) u.aimAt = target;
+    return null;
+  }
+
+  // Escorts that fall behind regroup on the helm, fighting anything they meet on the way.
+  updateEscorts(dt) {
+    this.escortT -= dt;
+    if (this.escortT > 0) return;
+    this.escortT = 2;
+    const h = this.helm;
+    const behind = this.alive('player').filter((u) => u !== h && u.mode !== 'attack'
+      && Math.hypot(u.x - h.x, u.z - h.z) > ESCORT_RANGE);
+    if (behind.length) this.order(behind, { type: 'attackmove', x: h.x, z: h.z });
+  }
+
   // ---------- Spawning ----------
 
   spawn(team, type, initial = false) {
@@ -260,6 +322,13 @@ export class Game {
     if (!this.over) {
       for (const team of ['player', 'enemy']) this.updateEconomy(team, dt);
       for (const ai of this.ai) ai.update(dt);
+      if (this.manual) {
+        if (!this.helm || !this.helm.alive) {
+          const next = this.cycleHelm();
+          if (next) this.hooks.toast(`You now command HMS ${next.name}`, TEAM_COLORS.player.css);
+        }
+        if (this.helm) this.updateEscorts(dt);
+      }
     }
     this.updateSpotting();
     for (const u of this.units) this.updateUnit(u, dt);
@@ -278,7 +347,8 @@ export class Game {
     if (this.alive(team).length >= ECONOMY.maxShips) return;
     t.buildT += dt;
     const type = t.queue[0];
-    if (t.buildT >= UNITS[type].build) {
+    const slow = team === 'enemy' && !this.demo ? this.diff.build : 1;
+    if (t.buildT >= UNITS[type].build * slow) {
       t.queue.shift();
       t.buildT = 0;
       t.built++;
@@ -311,6 +381,10 @@ export class Game {
       return;
     }
     const s = u.stats;
+    if (u === this.helm) {
+      this.updateHelm(u, dt);
+      return;
+    }
     if (u.attackTarget && !this.validTarget(u, u.attackTarget)) {
       u.attackTarget = null;
       if (u.mode === 'attack') u.mode = 'idle';
@@ -353,7 +427,41 @@ export class Game {
     }
   }
 
-  steer(u, dest, dt) {
+  // The player's own ship: driven by the keys (or sailing to a right-clicked point when they're
+  // released), and only fires when told to. The turrets still track the nearest enemy in range.
+  updateHelm(u, dt) {
+    const s = u.stats;
+    const { throttle, rudder } = this.helmInput;
+    u.cooldown -= dt;
+    u.scanT -= dt;
+    if (u.scanT <= 0) {
+      u.scanT = 0.3;
+      u.aimAt = this.findTarget(u, s.range);
+    }
+    if (throttle || rudder) {
+      u.mode = 'idle';
+      u.target = null;
+      const turn = s.turn * dt * (0.4 + Math.abs(u.speed) / s.speed);
+      u.heading += rudder * turn * (u.speed < 0 ? -1 : 1);
+      // Rudder alone holds the current speed; reverse is slow.
+      const want = throttle ? throttle * s.speed : u.speed;
+      u.speed += THREE.MathUtils.clamp(want - u.speed, -3 * dt, 1.5 * dt);
+      this.steer(u, null, dt, true);
+      return;
+    }
+    let dest = null;
+    if (u.mode === 'move' && u.target) {
+      if (Math.hypot(u.target.x - u.x, u.target.z - u.z) < 6 + s.size * 0.2) {
+        u.mode = 'idle';
+        u.target = null;
+      } else {
+        dest = u.target;
+      }
+    }
+    this.steer(u, dest, dt);
+  }
+
+  steer(u, dest, dt, coast = false) {
     const s = u.stats;
     if (dest) {
       let dx = dest.x - u.x, dz = dest.z - u.z;
@@ -376,8 +484,8 @@ export class Game {
       u.heading += THREE.MathUtils.clamp(diff, -turn, turn);
       const want = s.speed * Math.min(1, dist / 30) * Math.max(0.25, Math.cos(diff));
       u.speed += THREE.MathUtils.clamp(want - u.speed, -3 * dt, 1.5 * dt);
-    } else {
-      u.speed = Math.max(0, u.speed - 2 * dt);
+    } else if (!coast) {
+      u.speed = u.speed > 0 ? Math.max(0, u.speed - 2 * dt) : Math.min(0, u.speed + 2 * dt);
     }
     u.x += Math.cos(u.heading) * u.speed * dt;
     u.z += Math.sin(u.heading) * u.speed * dt;

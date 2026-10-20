@@ -29,7 +29,7 @@ export class EnemyAI {
     const t = g.teams[this.team];
     if (t.queue.length >= 2) return;
     const fleet = g.alive(this.team);
-    if (fleet.length + t.queue.length >= ECONOMY.maxShips) return;
+    if (fleet.length + t.queue.length >= (this.cfg.maxShips || ECONOMY.maxShips)) return;
 
     let choice = this.saveFor;
     if (!choice) {
@@ -81,7 +81,8 @@ export class EnemyAI {
     // Launch an attack wave once the fleet is big enough; each wave needs a bit more.
     const idle = mine.filter((u) => !this.attacking.has(u.id));
     const needed = this.cfg.attackArmy + this.waves;
-    if (idle.length >= needed || (g.time > 420 && idle.length >= 3)) {
+    const ready = g.time >= (this.cfg.firstWave || 0);
+    if (ready && (idle.length >= needed || (g.time > 420 && idle.length >= 3))) {
       const wave = idle.filter((u) => u.mode === 'idle' || u.mode === 'attackmove');
       if (wave.length >= Math.min(needed, 3)) {
         this.waves++;

@@ -35,11 +35,15 @@ export const CAPTURE = { radius: 40, rate: 0.12 };
 // Submarines stay hidden for this long after they fire.
 export const REVEAL_TIME = 3;
 
+// Enemy handicaps: income and build-time multipliers, a fleet cap, and how long before the first attack wave.
 export const DIFFICULTY = {
-  easy: { income: 0.75, think: 3.5, attackArmy: 7, accuracy: 0.75 },
-  normal: { income: 1, think: 2.5, attackArmy: 5, accuracy: 0.85 },
-  hard: { income: 1.35, think: 1.5, attackArmy: 4, accuracy: 0.95 },
+  easy: { income: 0.55, build: 1.7, maxShips: 9, firstWave: 240, think: 4, attackArmy: 8, accuracy: 0.7 },
+  normal: { income: 0.75, build: 1.35, maxShips: 13, firstWave: 150, think: 3, attackArmy: 6, accuracy: 0.8 },
+  hard: { income: 1.1, build: 1, maxShips: 20, firstWave: 60, think: 2, attackArmy: 5, accuracy: 0.9 },
 };
+
+// Manual mode: escorts regroup on your ship when they drift further away than this.
+export const ESCORT_RANGE = 70;
 
 export const MAP = {
   bounds: 470,

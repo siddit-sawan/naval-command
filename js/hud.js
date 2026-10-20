@@ -97,14 +97,21 @@ export class Hud {
 
   renderSelection(game, sel) {
     if (!sel.length) {
-      this.setPanel('No selection', 'muted', 'Click a ship, or drag to select a group.<br>Right-click water to move, an enemy to attack.');
+      this.setPanel('No selection', 'muted', game.manual
+        ? 'No ships left. Build one to take the helm.'
+        : 'Click a ship, or drag to select a group.<br>Right-click water to move, an enemy to attack.');
       return;
     }
     if (sel.length === 1) {
       const u = sel[0];
       const s = u.stats;
       const engaged = u.engage && game.distTo(u, u.engage) <= s.range;
-      this.setPanel(`HMS ${u.name}`, '', `<div class="muted">${s.label} · ${engaged && u.mode !== 'attack' ? 'Engaging' : STATUS[u.mode]}</div>
+      let status = engaged && u.mode !== 'attack' ? 'Engaging' : STATUS[u.mode];
+      if (u === game.helm) {
+        const weapon = s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns';
+        status = `At the helm · ${u.cooldown > 0 ? 'Reloading…' : `<span style="color:var(--green)">${weapon} ready</span>`}`;
+      }
+      this.setPanel(`HMS ${u.name}`, '', `<div class="muted">${s.label} · ${status}</div>
         <div class="hpbar"><div style="width:${Math.round((u.hp / u.maxHp) * 100)}%"></div></div>
         Hull ${Math.ceil(u.hp)}/${u.maxHp} · ${(u.speed * 2).toFixed(0)} kn<br>
         <span class="muted">Range ${s.range} · ${s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns'} ${s.damage}${s.stealth ? '<br>Hidden unless enemies are close' : ''}${s.subBonus ? '<br>Hunts submarines' : ''}</span>`);

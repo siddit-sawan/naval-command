@@ -125,13 +125,16 @@ function resetView() {
 // ---------- Game lifecycle ----------
 let state = 'loading';
 let difficulty = 'normal';
+let mode = 'fleet'; // 'fleet' commands the whole navy; 'manual' puts you at the helm of one ship
 let game = null;
+const manual = () => game && game.manual;
 
 function newGame(demo) {
   if (game) game.dispose();
   game = new Game(scene, effects, {
     demo,
     difficulty,
+    manual: mode === 'manual',
     hooks: {
       toast: (text, color) => hud.toast(text, color),
       onGameOver: (winner) => {
@@ -170,7 +173,9 @@ function startPlay() {
   cam.yaw = Math.atan2(Math.sin(cam.yaw), Math.cos(cam.yaw));
   Object.assign(goal, { x: HOME.x, z: HOME.z, yaw: 0, pitch: DEFAULT_PITCH, dist: 170 });
   setState('play');
-  hud.toast('Capture outposts for income. Destroy the enemy harbor!');
+  hud.toast(manual()
+    ? 'WASD to steer, click to fire. Your fleet follows you!'
+    : 'Capture outposts for income. Destroy the enemy harbor!');
 }
 
 function togglePause() {
@@ -192,6 +197,12 @@ for (const btn of document.querySelectorAll('#diffRow .diff')) {
   btn.addEventListener('click', () => {
     difficulty = btn.dataset.diff;
     document.querySelectorAll('#diffRow .diff').forEach((b) => b.classList.toggle('active', b === btn));
+  });
+}
+for (const btn of document.querySelectorAll('#modeRow .diff')) {
+  btn.addEventListener('click', () => {
+    mode = btn.dataset.mode;
+    document.querySelectorAll('#modeRow .diff').forEach((b) => b.classList.toggle('active', b === btn));
   });
 }
 
@@ -298,12 +309,55 @@ function command(clientX, clientY) {
   if (waterPoint(clientX, clientY)) orderMove(hit.x, hit.z);
 }
 
+// ---------- Manual mode ----------
+function takeHelm(ship) {
+  game.setHelm(ship);
+  hud.toast(`You now command HMS ${ship.name}`, '#3fa2ff');
+  sfx.click();
+}
+
+// Click: take over one of your ships, or fire at the enemy / water under the cursor.
+function helmClick(clientX, clientY) {
+  const own = pickShip(clientX, clientY, 'player');
+  if (own) {
+    if (own !== game.helm) takeHelm(own);
+    return;
+  }
+  const target = pickShip(clientX, clientY, 'enemy') || pickEnemyHarbor(clientX, clientY);
+  const aim = target || (waterPoint(clientX, clientY) && { x: hit.x, z: hit.z });
+  if (aim) helmShoot(aim);
+}
+
+function helmShoot(aim) {
+  const err = game.helmFire(aim);
+  if (err && err !== 'Reloading') hud.toast(err, '#ff5a4f');
+  if (err) sfx.denied();
+}
+
+// Right-click: sail the helm ship to that point until a steering key is pressed.
+function helmCommand(clientX, clientY) {
+  const target = pickShip(clientX, clientY, 'enemy') || pickEnemyHarbor(clientX, clientY);
+  if (target) { helmShoot(target); return; }
+  if (!game.helm || !waterPoint(clientX, clientY)) return;
+  game.order([game.helm], { type: 'move', x: hit.x, z: hit.z });
+  effects.ring(hit.x, hit.z, { life: 0.8, grow: 5 });
+  sfx.order();
+}
+
 // ---------- Keyboard ----------
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Escape') { togglePause(); return; }
   if (state !== 'play') return;
+  if (manual() && (e.code === 'Tab' || e.code === 'Space')) {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (e.code === 'Space') helmShoot(null);
+    else if (game.cycleHelm()) takeHelm(game.helm);
+    return;
+  }
   if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
+    if (manual()) return;
     e.preventDefault();
     setSelection(playerShips());
     return;
@@ -326,10 +380,17 @@ window.addEventListener('blur', () => keys.clear());
 function handleKeys(dt) {
   const speed = goal.dist * 0.9 * dt;
   const has = (...codes) => codes.some((c) => keys.has(c));
-  if (has('KeyW', 'ArrowUp')) pan(0, speed);
-  if (has('KeyS', 'ArrowDown')) pan(0, -speed);
-  if (has('KeyA', 'ArrowLeft')) pan(-speed, 0);
-  if (has('KeyD', 'ArrowRight')) pan(speed, 0);
+  if (manual()) {
+    // The keys drive your ship instead of the camera, which follows it.
+    game.helmInput.throttle = has('KeyW', 'ArrowUp') ? 1 : has('KeyS', 'ArrowDown') ? -0.35 : 0;
+    game.helmInput.rudder = (has('KeyD', 'ArrowRight') ? 1 : 0) - (has('KeyA', 'ArrowLeft') ? 1 : 0);
+    if (game.helm) lookAt(game.helm.x, game.helm.z);
+  } else {
+    if (has('KeyW', 'ArrowUp')) pan(0, speed);
+    if (has('KeyS', 'ArrowDown')) pan(0, -speed);
+    if (has('KeyA', 'ArrowLeft')) pan(-speed, 0);
+    if (has('KeyD', 'ArrowRight')) pan(speed, 0);
+  }
   if (has('KeyQ')) rotate(-dt * 1.4, 0);
   if (has('KeyE')) rotate(dt * 1.4, 0);
   if (has('KeyR')) rotate(0, dt * 0.9);
@@ -401,6 +462,7 @@ canvas.addEventListener('pointermove', (e) => {
   } else if (p.orbit) {
     rotate(-dx * 0.006, dy * 0.004);
   } else if (!p.touch && p.button === 0) {
+    if (manual()) return;
     boxing = p.moved > 6;
     selBox.classList.toggle('hidden', !boxing);
     Object.assign(selBox.style, {
@@ -425,6 +487,11 @@ const endPointer = (e) => {
     return;
   }
 
+  if (manual()) {
+    if (p.button === 0 && p.moved < (p.touch ? 10 : 6)) helmClick(e.clientX, e.clientY);
+    else if (!p.touch && p.button === 2 && p.moved < 6) helmCommand(e.clientX, e.clientY);
+    return;
+  }
   if (!p.touch && p.button === 0) {
     if (boxing) {
       const x0 = Math.min(p.sx, p.x), x1 = Math.max(p.sx, p.x);
