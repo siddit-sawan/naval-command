@@ -321,7 +321,8 @@ const BUILDERS = {
 const EYES = {
   corvette: [0.7, 4.6],
   destroyer: [1.8, 6.4],
-  submarine: [2.4, 3.8],
+  // Ahead of the sail's masts, and up at periscope height: subs ride low and the swell would fill the view.
+  submarine: [4.0, 6.0],
   battleship: [1.4, 10.2],
 };
 
