@@ -124,8 +124,9 @@ export class EnemyAI {
   }
 }
 
-// Team deathmatch: every ship hunts the nearest enemy it can see. With nothing in sight, the enemy
-// sweeps toward where the player's fleet is, and the player's escorts stay with the flagship.
+// Team deathmatch: weapons only work while the team holds outposts, so unarmed fleets go capture
+// first. Armed ships hunt the nearest enemy they can see; with nothing in sight, the enemy sweeps toward
+// where the player's fleet is, and the player's escorts stay with the flagship.
 export class FleetAI {
   constructor(game, team, cfg) {
     this.game = game;
@@ -145,29 +146,54 @@ export class FleetAI {
     const flag = this.team === 'player' ? g.helm : null;
     const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
-    for (const u of g.alive(this.team)) {
-      if (u === g.helm) continue;
-      let best = null, bestD = Infinity;
-      for (const e of seen) {
-        if (flag && dist(e, flag) > DEATHMATCH.escortLeash) continue;
-        const d = dist(u, e);
-        if (d < bestD) { best = e; bestD = d; }
+    // Weapons only come online by holding outposts: with none, everyone goes to capture; with fewer
+    // than two, every other ship keeps capturing while the rest fight.
+    const held = g.outpostsHeld(this.team);
+    const unarmed = held < DEATHMATCH.unlock[0];
+    const sign = this.team === 'player' ? 1 : -1;
+    const open = g.outposts.filter((o) => o.progress * sign < 0.99);
+    const claimed = new Map();
+
+    g.alive(this.team).forEach((u, i) => {
+      if (u === g.helm) return;
+      if (open.length && (unarmed || (held < 2 && i % 2 === 0))) {
+        let pick = null, score = Infinity;
+        for (const o of open) {
+          const sc = dist(u, o) + (claimed.get(o) || 0) * 150;
+          if (sc < score) { pick = o; score = sc; }
+        }
+        claimed.set(pick, (claimed.get(pick) || 0) + 1);
+        const heading = u.target && Math.hypot(u.target.x - pick.x, u.target.z - pick.z) < 30;
+        const there = dist(u, pick) < 25;
+        if (!heading && !there) g.order([u], { type: 'attackmove', x: pick.x + (Math.random() - 0.5) * 30, z: pick.z + (Math.random() - 0.5) * 30 });
+        return;
       }
-      if (best) {
-        if (u.attackTarget !== best) g.order([u], { type: 'attack', target: best });
-        continue;
-      }
-      if (flag) {
-        // Form up on the flagship, off its quarter.
-        if (dist(u, flag) > 90) g.order([u], { type: 'attackmove', x: flag.x, z: flag.z });
-        continue;
-      }
-      // Search: head for the enemy fleet's rough position, through the fog.
-      if (u.mode === 'idle' || u.mode === 'attack' || !u.target) {
-        const cx = foes.reduce((s, e) => s + e.x, 0) / foes.length;
-        const cz = foes.reduce((s, e) => s + e.z, 0) / foes.length;
-        g.order([u], { type: 'attackmove', x: cx + (Math.random() - 0.5) * 160, z: cz + (Math.random() - 0.5) * 160 });
-      }
+      this.fight(u, seen, foes, flag, dist);
+    });
+  }
+
+  fight(u, seen, foes, flag, dist) {
+    const g = this.game;
+    let best = null, bestD = Infinity;
+    for (const e of seen) {
+      if (flag && dist(e, flag) > DEATHMATCH.escortLeash) continue;
+      const d = dist(u, e);
+      if (d < bestD) { best = e; bestD = d; }
+    }
+    if (best) {
+      if (u.attackTarget !== best) g.order([u], { type: 'attack', target: best });
+      return;
+    }
+    if (flag) {
+      // Form up on the flagship, off its quarter.
+      if (dist(u, flag) > 90) g.order([u], { type: 'attackmove', x: flag.x, z: flag.z });
+      return;
+    }
+    // Search: head for the enemy fleet's rough position, through the fog.
+    if (u.mode === 'idle' || u.mode === 'attack' || !u.target) {
+      const cx = foes.reduce((s, e) => s + e.x, 0) / foes.length;
+      const cz = foes.reduce((s, e) => s + e.z, 0) / foes.length;
+      g.order([u], { type: 'attackmove', x: cx + (Math.random() - 0.5) * 160, z: cz + (Math.random() - 0.5) * 160 });
     }
   }
 }

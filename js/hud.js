@@ -111,7 +111,8 @@ export class Hud {
         const weapon = u.weapons ? u.weapons[u.weaponIdx].name : s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns';
         status = `At the helm · ${u.cooldown > 0 ? 'Reloading…' : `<span style="color:var(--green)">${weapon} ready</span>`}`;
       }
-      this.setPanel(`HMS ${u.name}`, '', `<div class="muted">${s.label} · ${status}</div>
+      const plane = game.planeStatus(u);
+      this.setPanel(`HMS ${u.name}`, '', `<div class="muted">${s.label} · ${status}</div>${plane ? `<div class="muted">✈ ${plane}</div>` : ''}
         <div class="hpbar"><div style="width:${Math.round((u.hp / u.maxHp) * 100)}%"></div></div>
         Hull ${Math.ceil(u.hp)}/${u.maxHp} · ${(u.speed * 2).toFixed(0)} kn<br>
         <span class="muted">Range ${s.range} · ${s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns'} ${s.damage}${s.stealth ? '<br>Hidden unless enemies are close' : ''}${s.subBonus ? '<br>Hunts submarines' : ''}</span>`);
@@ -179,6 +180,15 @@ export class Hud {
         c.lineWidth = 1;
         c.stroke();
       }
+    }
+
+    for (const p of game.aircraft) {
+      const x = mx(p.x), y = my(p.z);
+      c.strokeStyle = TEAM_COLORS[p.team].css;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(x - 4, y); c.lineTo(x + 4, y); c.moveTo(x, y - 3); c.lineTo(x, y + 3);
+      c.stroke();
     }
 
     if (viewCorners) {

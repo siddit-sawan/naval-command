@@ -6,12 +6,13 @@ import { Effects } from './effects.js';
 import { Game, warmupMeshes } from './game.js';
 import { createWeather } from './fog.js';
 import { Hud } from './hud.js';
-import { UNITS, UNIT_ORDER, MAP } from './config.js';
+import { UNITS, UNIT_ORDER, MAP, DEATHMATCH } from './config.js';
 import { sfx, unlock, setMuted, isMuted } from './audio.js';
 import { sdk, showAd, isAdRunning } from './platform.js';
 import { profile } from './profile.js';
 import { createMenus } from './menu.js';
 import { createBridge } from './bridge.js';
+import { createTutorial } from './tutorial.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -155,6 +156,7 @@ function setState(next) {
   if (next === 'play') sdk('gameplayStart');
   else if (prev === 'play') sdk('gameplayStop');
   if (next !== 'play' && document.pointerLockElement) document.exitPointerLock();
+  if (next === 'menu' || next === 'over') tutorial.stop();
   if (next === 'menu') {
     // Menu backdrop: two AI fleets fight it out while the camera drifts around the middle.
     if (prev !== 'loading') newGame(true);
@@ -174,6 +176,7 @@ function startPlay() {
   look.yaw = 0;
   look.pitch = -0.08;
   setState('play');
+  if (tutorial.start(manual() ? 'manual' : 'fleet')) return;
   hud.toast(manual()
     ? 'Team deathmatch: sink all five enemy ships! Lead your shots · 1-3 weapons'
     : 'Capture outposts for income. Destroy the enemy harbor!');
@@ -190,6 +193,14 @@ function toggleMute() {
 }
 
 $('playBtn').addEventListener('click', startPlay);
+$('tutorialBtn').addEventListener('click', () => {
+  profile.markTutorial(mode, false);
+  startPlay();
+});
+$('pauseTutorialBtn').addEventListener('click', () => {
+  setState('play');
+  tutorial.start(manual() ? 'manual' : 'fleet', true);
+});
 // Between matches is the natural break for an ad.
 $('againBtn').addEventListener('click', async () => {
   await showAd('midgame', adHooks);
@@ -272,6 +283,20 @@ const menus = createMenus({
   onLiveryChange: () => { if (state === 'menu') newGame(true); },
 });
 const wheelhouse = createBridge(scene);
+const tutorial = createTutorial({
+  game: () => game,
+  selected: () => selectedShips(),
+  shipCamMode: () => shipCam.mode,
+  look: () => look,
+  goal: () => goal,
+});
+// Replay a tutorial from How to Play: it shows the next time that mode starts.
+for (const btn of document.querySelectorAll('[data-tutorial]')) {
+  btn.addEventListener('click', () => {
+    profile.markTutorial(btn.dataset.tutorial, false);
+    menus.notify(`The ${btn.dataset.tutorial === 'manual' ? 'Manual' : 'Fleet'} tutorial will play next time you start that mode`, '#4cd68a');
+  });
+}
 
 // In-match boost: watch an ad for gold, available a little while into the battle and then on a cooldown.
 const BOOST_GOLD = 250;
@@ -369,10 +394,27 @@ function command(clientX, clientY) {
   const target = pickShip(clientX, clientY, 'enemy') || pickEnemyHarbor(clientX, clientY);
   if (target) {
     game.order(sel, { type: 'attack', target });
+    // Airborne planes from these battleships go after enemy ships too.
+    if (target.kind === 'ship') for (const s of sel) game.directAircraft(s, { target });
     sfx.order();
     return;
   }
-  if (waterPoint(clientX, clientY)) orderMove(hit.x, hit.z);
+  if (waterPoint(clientX, clientY)) {
+    for (const s of sel) game.directAircraft(s, { point: { x: hit.x, z: hit.z } });
+    orderMove(hit.x, hit.z);
+  }
+}
+
+// L: selected battleships launch their scout bombers at what they're attacking (or to hunt).
+function launchPlanes() {
+  const carriers = selectedShips().filter((s) => s.type === 'battleship');
+  if (!carriers.length) { hud.toast('Select a battleship to launch its aircraft', '#ff5a4f'); sfx.denied(); return; }
+  let err = null, launched = 0;
+  for (const s of carriers) {
+    const e = game.launchAircraft(s, s.attackTarget && s.attackTarget.kind === 'ship' ? { target: s.attackTarget } : null);
+    if (e) err = e; else launched++;
+  }
+  if (!launched && err) { hud.toast(err, '#ff5a4f'); sfx.denied(); }
 }
 
 // ---------- Manual mode ----------
@@ -524,6 +566,7 @@ const lock = { target: null, t: 0 };
 function lockedTarget() {
   const h = game.helm;
   const w = h && h.weapons[h.weaponIdx];
+  if (w && w.kind === 'aircraft') return pickShip(window.innerWidth / 2, window.innerHeight / 2, 'enemy');
   return w && w.kind === 'missile' && lock.target && lock.t >= w.lock ? lock.target : null;
 }
 
@@ -540,7 +583,16 @@ function updateCrosshair(dt) {
   const ready = h.cooldown <= 0;
   let status = ready ? 'READY' : `RELOAD ${h.cooldown.toFixed(1)}s`;
   let good = false, far = false;
-  if (w.kind === 'missile') {
+  if (!game.weaponsOnline('player', h.weaponIdx)) {
+    lock.target = null;
+    const need = DEATHMATCH.unlock[h.weaponIdx];
+    status = `OFFLINE · HOLD ${need} OUTPOST${need > 1 ? 'S' : ''}`;
+    far = true;
+  } else if (w.kind === 'aircraft') {
+    lock.target = null;
+    status = h.plane ? (target ? 'CLICK: BOMB THIS SHIP' : 'CLICK: SEND AIRCRAFT HERE') : ready ? 'CLICK TO LAUNCH' : `READY IN ${Math.ceil(h.cooldown)}s`;
+    good = !!h.plane && !!target;
+  } else if (w.kind === 'missile') {
     const valid = target && game.distTo(h, target) <= w.range;
     if (valid && lock.target === target) lock.t += state === 'play' ? dt : 0;
     else { lock.target = valid ? target : null; lock.t = 0; }
@@ -586,15 +638,23 @@ function updateWeaponPanel() {
   }
   weaponPanel.querySelectorAll('.weapon-btn').forEach((b, i) => {
     const w = h.weapons[i];
+    const online = game.weaponsOnline('player', i);
     b.classList.toggle('active', i === h.weaponIdx);
+    b.classList.toggle('locked', !online);
     b.querySelector('.prog').style.width = `${(1 - h.wcool[i] / w.reload) * 100}%`;
+    const need = DEATHMATCH.unlock[i];
+    const desc = !online ? `🔒 Hold ${need} outpost${need > 1 ? 's' : ''} to arm`
+      : w.kind === 'aircraft' ? (h.plane ? 'Airborne · click to direct' : 'Launch, then click to direct')
+        : `${w.kind === 'depth' ? 'Drops astern' : `Range ${w.range}`} · ${w.damage} dmg`;
+    const el = b.querySelector('.desc');
+    if (el.textContent !== desc) el.textContent = desc;
   });
 }
 const scoreEl = $('score');
 function updateScore() {
   if (!game.deathmatch) return;
   const mine = game.alive('player').length, theirs = game.alive('enemy').length;
-  scoreEl.innerHTML = `<span class="you">⚓ ${mine}</span> vs <span class="foe">${theirs} ⚓</span> · Sunk ${game.teams.player.kills}`;
+  scoreEl.innerHTML = `<span class="you">⚓ ${mine}</span> vs <span class="foe">${theirs} ⚓</span> · ⚑ ${game.outpostsHeld('player')}/${game.outposts.length} · Sunk ${game.teams.player.kills}`;
 }
 
 // ---------- Fleet mode: cameras on a selected ship ----------
@@ -699,6 +759,10 @@ const EDGE = 8;
 // ---------- Keyboard ----------
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
+  if (e.code === 'Enter' && tutorial.active && state === 'play') {
+    tutorial.next();
+    return;
+  }
   if (e.code === 'Escape' && state === 'play' && shipCamActive()) {
     setShipCam('overview');
     return;
@@ -737,6 +801,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'KeyM' && !e.repeat) { toggleMute(); return; }
+  if (e.code === 'KeyL' && !e.repeat && !manual()) { launchPlanes(); return; }
   if (e.code === 'KeyH') lookAt(HOME.x, HOME.z);
   if (e.code === 'KeyC') {
     if (bridge() || (shipCamActive() && shipCam.mode === 'bridge')) Object.assign(look, { yaw: 0, pitch: -0.08 });
@@ -1079,6 +1144,7 @@ function frame() {
     // The followed ship hides its own selection ring and health bar from up close.
     game.fpShip = followed;
     game.listener = focus;
+    game.aiHold = tutorial.active;
     game.update(time, dt, camera);
   }
   if (onBridge && onBridge.alive) placeBridgeCamera(onBridge);
@@ -1113,6 +1179,7 @@ function frame() {
     updateWeaponPanel();
     updateScore();
     updateCamBar();
+    tutorial.update();
   }
   renderer.render(scene, camera);
 }

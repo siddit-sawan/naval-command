@@ -69,6 +69,17 @@ export const DEATHMATCH = {
   aiSpread: 0.035, // extra AI dispersion per unit of range, so long shots aren't laser-accurate
   escortLeash: 350, // escorts only chase enemies this close to your flagship
   gravity: 10, // shells fly flat and fast, dropping under this gravity (world units/s²)
+  // Weapons come online by holding outposts: outposts needed for weapon slot 1, 2, 3.
+  unlock: [1, 2, 2],
+};
+
+// Battleships' scout bombers: launched every `cooldown` seconds, they bomb ships, dogfight enemy planes,
+// spot ships hidden in fog and take anti-aircraft fire from ships they fly over.
+export const AIRCRAFT = {
+  cooldown: 45, life: 70, speed: 46, turn: 1.4, hp: 40, scale: 1.7,
+  altitude: 34, runAltitude: 16, bombs: 2, bombDamage: 70, bombSplash: 8,
+  gunRange: 70, gunDamage: 5, gunReload: 0.22, dogfightRange: 150,
+  aaRange: 60, aaDps: 3, spotRange: 110, launchRange: 550,
 };
 
 /**
@@ -91,6 +102,7 @@ export const LOADOUTS = {
   battleship: [
     { name: '16-inch main battery', kind: 'shell', range: 560, damage: 84, reload: 6, velocity: 320, spread: 7, splash: 12 },
     { name: 'Secondary guns', kind: 'shell', range: 240, damage: 14, reload: 1.1, velocity: 290, spread: 3 },
+    { name: 'Scout bomber', kind: 'aircraft', range: 600, damage: 70, reload: 45 },
   ],
   submarine: [
     { name: 'Heavy torpedo', kind: 'torpedo', range: 460, damage: 120, reload: 7, speed: 34, count: 1 },

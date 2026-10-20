@@ -169,7 +169,7 @@ export function createBridge(scene) {
   }
 
   // Every weapon the ship carries, with the selected one highlighted and its reload bar.
-  function paintWeapons(s, helm) {
+  function paintWeapons(s, helm, game) {
     frameScreen(s, 'WEAPONS');
     const c = s.ctx;
     const list = helm.weapons || [{ name: helm.stats.weapon === 'torpedo' ? 'Torpedoes' : 'Main guns', reload: helm.stats.reload }];
@@ -178,7 +178,8 @@ export function createBridge(scene) {
       const y = 40 + i * rowH;
       const sel = !helm.weapons || i === helm.weaponIdx;
       const cd = helm.wcool ? helm.wcool[i] : helm.cooldown;
-      const ready = cd <= 0;
+      const online = !helm.weapons || game.weaponsOnline(helm.team, i);
+      const ready = cd <= 0 && online;
       if (sel) {
         c.fillStyle = 'rgba(127,208,255,0.12)';
         c.fillRect(10, y, 300, rowH - 6);
@@ -188,8 +189,8 @@ export function createBridge(scene) {
       c.fillStyle = sel ? '#e6f2fa' : CYAN;
       c.fillText(`${i + 1} ${w.name.toUpperCase()}`, 18, y + 20);
       c.textAlign = 'right';
-      c.fillStyle = ready ? GREEN : AMBER;
-      c.fillText(ready ? 'READY' : `${cd.toFixed(1)}s`, 302, y + 20);
+      c.fillStyle = !online ? RED : ready ? GREEN : AMBER;
+      c.fillText(!online ? 'OFFLINE' : ready ? 'READY' : `${cd.toFixed(1)}s`, 302, y + 20);
       bar(c, 18, y + 30, 284, 10, ready ? 1 : 1 - cd / w.reload, ready ? GREEN : AMBER);
     });
   }
@@ -372,7 +373,7 @@ export function createBridge(scene) {
       paintT -= dt;
       if (paintT > 0) return;
       paintT = 0.12;
-      paintWeapons(screens[0], helm);
+      paintWeapons(screens[0], helm, game);
       paintTactical(screens[1], helm, game, t);
       paintNav(screens[2], helm, input);
       paintStatus(screens[3], helm, game);

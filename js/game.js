@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS, HELM_ARMOR, DEATHMATCH, LOADOUTS } from './config.js';
-import { makeShipModel, makeHarbor, makeOutpost } from './models.js';
+import { UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS, HELM_ARMOR, DEATHMATCH, LOADOUTS, AIRCRAFT } from './config.js';
+import { makeShipModel, makeHarbor, makeOutpost, makeAircraftModel } from './models.js';
 import { ISLANDS, sampleOcean } from './ocean.js';
 import { Effects } from './effects.js';
 import { sfx } from './audio.js';
@@ -93,6 +93,9 @@ export class Game {
     this.manual = manual && !demo;
     this.deathmatch = this.manual;
     this.overNotified = false;
+    this.aircraft = [];
+    this.weaponLevel = 0; // deathmatch: how many of the player's weapon slots are online, for the alerts
+    this.aiHold = false; // set while a tutorial runs: the AI fleets hold position and the enemy doesn't build
     this.helm = null;
     this.helmInput = { throttle: 0, rudder: 0 };
     this.fpShip = null; // set by the camera: the ship it rides with hides its own overlays
@@ -157,7 +160,6 @@ export class Game {
 
   // Two identical fleets in line abreast, facing each other across the middle of the map.
   setupDeathmatch(flagship) {
-    for (const o of this.outposts) o.ring.visible = false;
     this.ai = [new FleetAI(this, 'enemy', this.diff), new FleetAI(this, 'player', this.diff)];
     const lineup = [flagship, ...DEATHMATCH.escorts];
     for (const team of ['player', 'enemy']) {
@@ -220,6 +222,16 @@ export class Game {
     const h = this.harbors[foe];
     if (!this.deathmatch && h.alive && this.distTo(u, h) < bestD) best = h;
     return best;
+  }
+
+  outpostsHeld(team) {
+    return this.outposts.filter((o) => o.owner === team).length;
+  }
+
+  // In a deathmatch, weapons come online by holding outposts (DEATHMATCH.unlock per slot).
+  weaponsOnline(team, slot = 0) {
+    if (!this.deathmatch) return true;
+    return this.outpostsHeld(team) >= (DEATHMATCH.unlock[slot] ?? 2);
   }
 
   // The weapon a ship's AI fires: its main loadout weapon, or one made from its class stats.
@@ -298,6 +310,16 @@ export class Game {
     const u = this.helm;
     if (!u || !u.alive) return 'No ship at the helm';
     const w = u.weapons[u.weaponIdx];
+    if (!this.weaponsOnline('player', u.weaponIdx)) {
+      const need = DEATHMATCH.unlock[u.weaponIdx];
+      return `Weapon offline: hold ${need} outpost${need > 1 ? 's' : ''} to arm it`;
+    }
+    if (w.kind === 'aircraft') {
+      // First click launches the bomber; after that, clicks send it at the target or point aimed at.
+      const order = locked && locked.alive ? { target: locked } : aim ? { point: { x: aim.x, z: aim.z } } : null;
+      if (u.plane) { this.directAircraft(u, order); return null; }
+      return this.launchAircraft(u, order);
+    }
     if (u.wcool[u.weaponIdx] > 0) return 'Reloading';
     if (w.kind === 'missile') {
       if (!locked || !locked.alive) return 'Hold the crosshair on an enemy ship to lock on';
@@ -331,6 +353,191 @@ export class Game {
     if (!u || !u.weapons || i < 0 || i >= u.weapons.length) return null;
     u.weaponIdx = i;
     return u.weapons[i];
+  }
+
+  // ---------- Aircraft ----------
+
+  // Launch a battleship's scout bomber. order: { target: ship } to bomb, { point } to patrol, or null
+  // to hunt on its own. Returns an error message, or null when it took off.
+  launchAircraft(ship, order = null) {
+    if (ship.type !== 'battleship' || !ship.alive) return 'Only battleships carry aircraft';
+    if (ship.plane) return 'Aircraft already airborne';
+    if (ship.planeCd > 0) return `Aircraft ready in ${Math.ceil(ship.planeCd)}s`;
+    const mesh = makeAircraftModel(ship.team === 'player' ? this.livery : 'enemy');
+    this.root.add(mesh);
+    const fx = Math.cos(ship.heading), fz = Math.sin(ship.heading);
+    const p = {
+      team: ship.team, owner: ship, mesh, order, hp: AIRCRAFT.hp, bombs: AIRCRAFT.bombs, life: AIRCRAFT.life,
+      x: ship.x - fx * ship.stats.size * 0.4, z: ship.z - fz * ship.stats.size * 0.4, y: 6,
+      heading: ship.heading, roll: 0, gunCd: 0, dropCd: 0, alive: true,
+    };
+    this.aircraft.push(p);
+    ship.plane = p;
+    ship.planeCd = AIRCRAFT.cooldown;
+    sfx.torpedo(this.volumeAt(ship.x, ship.z));
+    if (ship.team === 'player' && !this.demo) this.hooks.toast('Scout bomber launched', TEAM_COLORS.player.css);
+    return null;
+  }
+
+  directAircraft(ship, order) {
+    if (ship.plane && order) ship.plane.order = order;
+  }
+
+  // One line for the HUD: what a battleship's aircraft is doing.
+  planeStatus(ship) {
+    if (ship.type !== 'battleship') return null;
+    if (ship.plane) return ship.plane.bombs ? 'Aircraft airborne' : 'Aircraft returning';
+    if (ship.planeCd > 0) return `Aircraft ready in ${Math.ceil(ship.planeCd)}s`;
+    return 'Aircraft ready (L)';
+  }
+
+  // Launch cooldowns, and AI battleships launching when there's something to hunt. The player's own
+  // battleships launch on command (fleet) or from the weapon slot (helm); AI-run ones launch themselves.
+  updateAirOps(dt) {
+    for (const u of this.units) {
+      if (!u.alive || u.type !== 'battleship') continue;
+      if (!u.plane) u.planeCd = Math.max(0, u.planeCd - dt);
+      const auto = u !== this.helm && (u.team === 'enemy' || this.demo || this.deathmatch);
+      if (!auto || u.plane || u.planeCd > 0 || this.over || this.aiHold || !this.weaponsOnline(u.team, 2)) continue;
+      const foe = other(u.team);
+      const prey = this.units.some((e) => e.alive && e.team === foe && this.visibleTo(e, u.team)
+        && Math.hypot(e.x - u.x, e.z - u.z) < AIRCRAFT.launchRange)
+        || this.aircraft.some((a) => a.team === foe && Math.hypot(a.x - u.x, a.z - u.z) < AIRCRAFT.dogfightRange * 1.5);
+      if (prey) this.launchAircraft(u, null);
+    }
+  }
+
+  updateAircraft(dt) {
+    if (dt <= 0) return;
+    const A = AIRCRAFT;
+    for (const p of this.aircraft) {
+      const foe = other(p.team);
+      p.life -= dt;
+      p.gunCd -= dt;
+      p.dropCd -= dt;
+      let goal = null, alt = A.altitude, speed = A.speed;
+
+      // Dogfight any enemy plane close by.
+      let bandit = null, bd = A.dogfightRange;
+      for (const q of this.aircraft) {
+        if (q.team !== foe || !q.alive) continue;
+        const d = Math.hypot(q.x - p.x, q.z - p.z);
+        if (d < bd) { bandit = q; bd = d; }
+      }
+      if (bandit && p.life > 0) {
+        goal = bandit;
+        alt = bandit.y;
+        const off = Math.abs(wrapAngle(Math.atan2(bandit.z - p.z, bandit.x - p.x) - p.heading));
+        if (bd < A.gunRange && off < 0.35 && p.gunCd <= 0) {
+          p.gunCd = A.gunReload;
+          bandit.hp -= A.gunDamage;
+          for (let k = 0; k < 4; k++) {
+            const t = k / 4;
+            this.effects.emit(p.x + (bandit.x - p.x) * t, p.y + (bandit.y - p.y) * t, p.z + (bandit.z - p.z) * t, 0, 0, 0,
+              { life: 0.15, size0: 0.7, size1: 0.2, alpha: 0.9, color: [1, 0.85, 0.4] });
+          }
+          sfx.gun(this.volumeAt(p.x, p.z) * 0.35);
+        }
+      } else if (p.bombs > 0 && p.life > 0) {
+        // Bomb run on the ordered target, or the nearest enemy ship it can see.
+        let target = p.order && p.order.target && p.order.target.alive ? p.order.target : null;
+        if (!target && !(p.order && p.order.point)) {
+          let best = Infinity;
+          for (const e of this.units) {
+            if (!e.alive || e.team !== foe || !this.visibleTo(e, p.team)) continue;
+            const d = Math.hypot(e.x - p.x, e.z - p.z);
+            if (d < best) { best = d; target = e; }
+          }
+        }
+        if (target) {
+          alt = A.runAltitude;
+          // Where a bomb dropped now would land, against where the target will be by then.
+          const tf = Math.sqrt((2 * Math.max(1, p.y - 2)) / DEATHMATCH.gravity);
+          const tx = target.x + Math.cos(target.heading) * target.speed * tf;
+          const tz = target.z + Math.sin(target.heading) * target.speed * tf;
+          goal = { x: tx, z: tz };
+          const ix = p.x + Math.cos(p.heading) * speed * tf, iz = p.z + Math.sin(p.heading) * speed * tf;
+          if (p.dropCd <= 0 && Math.abs(p.y - A.runAltitude) < 4 && Math.hypot(ix - tx, iz - tz) < target.stats.size * 0.3 + 3) {
+            this.dropBomb(p, speed);
+          }
+        } else if (p.order && p.order.point) {
+          goal = p.order.point; // patrol: circles once it gets there
+        } else {
+          goal = p.owner.alive ? p.owner : null;
+        }
+      } else {
+        // Out of bombs or fuel: home to the battleship and land.
+        goal = p.owner.alive ? p.owner : null;
+        alt = 14;
+        if (p.owner.alive && Math.hypot(p.owner.x - p.x, p.owner.z - p.z) < 14) {
+          this.removeAircraft(p, false);
+          continue;
+        }
+        if (!p.owner.alive || p.life < -40) {
+          p.hp = 0; // out of fuel with nowhere to land
+        }
+      }
+
+      // Fly: bank into turns, climb or dive toward the wanted altitude.
+      let turn = 0;
+      if (goal) {
+        const want = Math.atan2(goal.z - p.z, goal.x - p.x);
+        const diff = wrapAngle(want - p.heading);
+        // Circle a point it has reached instead of overflying it forever.
+        turn = Math.hypot(goal.x - p.x, goal.z - p.z) < 25 ? A.turn : THREE.MathUtils.clamp(diff, -A.turn * dt, A.turn * dt) / dt;
+      }
+      p.heading += turn * dt;
+      p.roll += (THREE.MathUtils.clamp(-turn * 0.6, -0.9, 0.9) - p.roll) * Math.min(1, dt * 3);
+      p.x += Math.cos(p.heading) * speed * dt;
+      p.z += Math.sin(p.heading) * speed * dt;
+      p.y += (alt - p.y) * Math.min(1, dt * 0.9);
+      p.x = THREE.MathUtils.clamp(p.x, -MAP.bounds - 60, MAP.bounds + 60);
+      p.z = THREE.MathUtils.clamp(p.z, -MAP.bounds - 60, MAP.bounds + 60);
+
+      // Anti-aircraft fire from enemy ships below.
+      for (const e of this.units) {
+        if (e.alive && e.team === foe && Math.hypot(e.x - p.x, e.z - p.z) < A.aaRange) p.hp -= A.aaDps * dt;
+      }
+      if (p.hp <= 0) {
+        this.explode(p.x, p.y, p.z, 0.9);
+        sfx.explosion(this.volumeAt(p.x, p.z));
+        if (p.team === 'enemy' && !this.demo) this.hooks.toast('Enemy aircraft shot down', TEAM_COLORS.player.css);
+        this.removeAircraft(p, true);
+        continue;
+      }
+
+      const m = p.mesh;
+      m.position.set(p.x, p.y, p.z);
+      m.rotation.set(0, -p.heading, 0);
+      m.rotateX(p.roll);
+      m.userData.prop.rotation.x += dt * 40;
+      if (Math.random() < dt * 20) {
+        this.effects.emit(p.x - Math.cos(p.heading) * 4, p.y, p.z - Math.sin(p.heading) * 4, 0, 0, 0,
+          { life: 1.2, size0: 0.6, size1: 2, alpha: 0.25, color: [0.9, 0.9, 0.9] });
+      }
+    }
+    this.aircraft = this.aircraft.filter((p) => p.alive);
+  }
+
+  dropBomb(p, speed) {
+    p.bombs--;
+    p.dropCd = 0.8;
+    const mesh = new THREE.Mesh(chargeGeo, torpMat);
+    mesh.visible = false;
+    this.root.add(mesh);
+    const vel = new THREE.Vector3(Math.cos(p.heading) * speed, -2, Math.sin(p.heading) * speed);
+    this.projectiles.push({
+      kind: 'direct', team: p.team, pos: new THREE.Vector3(p.x, p.y - 1, p.z), vel, delay: 0, traveled: 0, maxDist: 600,
+      damage: AIRCRAFT.bombDamage, splash: AIRCRAFT.bombSplash, subBonus: 1, mesh,
+    });
+  }
+
+  removeAircraft(p, destroyed) {
+    p.alive = false;
+    this.root.remove(p.mesh);
+    if (p.owner.plane === p) p.owner.plane = null;
+    // A plane lost in action takes longer to replace than one that lands.
+    if (destroyed) p.owner.planeCd = Math.max(p.owner.planeCd, AIRCRAFT.cooldown);
   }
 
   // ---------- Spawning ----------
@@ -374,6 +581,7 @@ export class Game {
       cooldown: Math.random() * stats.reload, scanT: Math.random() * 0.3, spotted: false, revealedUntil: 0,
       mesh, ring, marker, path, bar, selected: false, hovered: false, sinkT: 0, lastHit: -99,
       wakeAcc: 0, sprayAcc: 0, smokeAcc: 0,
+      plane: null, planeCd: type === 'battleship' ? 15 + Math.random() * 20 : Infinity,
     };
     this.units.push(u);
     if (!initial) {
@@ -393,8 +601,10 @@ export class Game {
     this.time += dt;
 
     if (!this.over) {
-      if (!this.deathmatch) for (const team of ['player', 'enemy']) this.updateEconomy(team, dt);
-      for (const ai of this.ai) ai.update(dt);
+      if (!this.deathmatch) {
+        for (const team of ['player', 'enemy']) if (!(this.aiHold && team === 'enemy')) this.updateEconomy(team, dt);
+      }
+      if (!this.aiHold) for (const ai of this.ai) ai.update(dt);
       if (this.manual && (!this.helm || !this.helm.alive)) {
         const next = this.cycleHelm();
         if (next) this.hooks.toast(`You now command HMS ${next.name}`, TEAM_COLORS.player.css);
@@ -407,14 +617,29 @@ export class Game {
     this.separate();
     this.units = this.units.filter((u) => u.alive || u.sinkT < 5);
     for (const h of Object.values(this.harbors)) this.updateHarbor(h, dt);
+    this.updateOutposts(dt);
     if (this.deathmatch) this.updateDeathmatch();
-    else this.updateOutposts(dt);
+    this.updateAirOps(dt);
+    this.updateAircraft(dt);
     this.updateProjectiles(dt);
     this.updateVisuals(dt, camera);
   }
 
   // Last fleet afloat wins; the end screen follows once the final ship has gone down.
   updateDeathmatch() {
+    // Weapons come online in stages (one per distinct outpost count in DEATHMATCH.unlock).
+    const held = this.outpostsHeld('player');
+    const level = [...new Set(DEATHMATCH.unlock)].filter((n) => held >= n).length;
+    if (level !== this.weaponLevel && !this.over) {
+      if (level > this.weaponLevel) {
+        this.hooks.toast(level === 1 ? 'Weapons online! Main armament armed' : 'All weapons online', TEAM_COLORS.player.css);
+        sfx.built();
+      } else if (level === 0) {
+        this.hooks.toast('Weapons offline! Retake an outpost', TEAM_COLORS.enemy.css);
+        sfx.lost();
+      }
+      this.weaponLevel = level;
+    }
     if (!this.over) {
       for (const team of ['player', 'enemy']) {
         if (!this.alive(team).length) this.over = { winner: other(team), at: this.time };
@@ -470,7 +695,8 @@ export class Game {
       const foe = other(u.team);
       const h = this.harbors[foe];
       const harborReach = Math.min(u.stats.stealth ? HARBOR.detect : Infinity, Math.max(sight, HARBOR.detect * 0.6));
-      u.spotted = (h.alive && Math.hypot(u.x - h.x, u.z - h.z) < harborReach)
+      u.spotted = this.aircraft.some((a) => a.team === foe && Math.hypot(u.x - a.x, u.z - a.z) < AIRCRAFT.spotRange)
+        || (h.alive && Math.hypot(u.x - h.x, u.z - h.z) < harborReach)
         || this.units.some((e) => e.alive && e.team === foe
           && Math.hypot(u.x - e.x, u.z - e.z) < Math.min(u.stats.stealth ? e.stats.detect : Infinity, sight));
       // Surprise: an enemy surface ship looming out of the fog right next to the fleet.
@@ -543,7 +769,7 @@ export class Game {
     if (u.attackTarget && this.distTo(u, u.attackTarget) <= s.range) fireAt = u.attackTarget;
     else if (u.engage && this.distTo(u, u.engage) <= s.range) fireAt = u.engage;
     u.aimAt = fireAt || u.attackTarget || u.engage;
-    if (fireAt && u.cooldown <= 0) {
+    if (fireAt && u.cooldown <= 0 && this.weaponsOnline(u.team, 0)) {
       this.fire(u, fireAt);
       u.cooldown = s.reload * (0.9 + Math.random() * 0.2);
     }
@@ -554,7 +780,9 @@ export class Game {
   updateHelm(u, dt) {
     const s = u.stats;
     const { throttle, rudder } = this.helmInput;
-    for (let i = 0; i < u.wcool.length; i++) u.wcool[i] = Math.max(0, u.wcool[i] - dt);
+    for (let i = 0; i < u.wcool.length; i++) {
+      u.wcool[i] = u.weapons[i].kind === 'aircraft' ? u.planeCd : Math.max(0, u.wcool[i] - dt);
+    }
     u.cooldown = u.wcool[u.weaponIdx];
     u.scanT -= dt;
     if (u.scanT <= 0) {

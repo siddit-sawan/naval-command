@@ -26,6 +26,7 @@ const fresh = () => ({
   coins: 100, xp: 0, livery: 'dazzle', owned: ['dazzle'], adProgress: {},
   stats: { games: 0, wins: 0, sunk: 0, lost: 0, outposts: 0, bestTime: 0, coinsEarned: 0 },
   daily: { last: '', streak: 0 },
+  tutorials: {}, // modes whose tutorial has been finished or skipped
 });
 
 let data = fresh();
@@ -81,6 +82,13 @@ export const profile = {
     data.adProgress[id] = (data.adProgress[id] || 0) + 1;
     save();
     return data.adProgress[id];
+  },
+
+  // ---------- Tutorials ----------
+  tutorialSeen(mode) { return !!data.tutorials[mode]; },
+  markTutorial(mode, seen = true) {
+    data.tutorials = { ...data.tutorials, [mode]: seen };
+    save();
   },
 
   // ---------- Daily reward ----------

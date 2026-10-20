@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mat, makeIsland } from './scenery.js';
-import { TEAM_COLORS, HARBOR, CAPTURE } from './config.js';
+import { TEAM_COLORS, HARBOR, CAPTURE, AIRCRAFT } from './config.js';
 import { bake } from './bake.js';
 import { hullLivery, hullUVs, subLivery, pennantDecal, LIVERIES } from './livery.js';
 
@@ -437,4 +437,26 @@ export function makeOutpost(x, z) {
   group.add(ring);
   bake(group, 'outpost');
   return { group, flag, ring };
+}
+
+// Battleship scout bomber: a little float plane in the fleet's colors. +x is the nose.
+export function makeAircraftModel(key) {
+  const m = team(key);
+  const plane = new THREE.Group();
+  const add = builder(plane);
+  add(cached('acBody', () => new THREE.CylinderGeometry(0.32, 0.45, 4.2, 8).rotateZ(Math.PI / 2)), grey, 0, 0);
+  add(cached('acCowl', () => new THREE.CylinderGeometry(0.47, 0.47, 0.5, 8).rotateZ(Math.PI / 2)), dark, 2.1, 0);
+  add(cached('acCanopy', () => new THREE.SphereGeometry(0.35, 8, 6).scale(1.6, 0.9, 0.9)), glass, 0.5, 0.35);
+  add(cached('acWing', () => new THREE.BoxGeometry(1.1, 0.1, 6.2)), grey, 0.4, 0.05);
+  for (const z of [-2.8, 2.8]) add(cached('acTip', () => new THREE.BoxGeometry(1.12, 0.12, 0.6)), m.stripe, 0.4, 0.05, z);
+  add(cached('acTail', () => new THREE.BoxGeometry(0.7, 0.08, 2.2)), grey, -1.9, 0.1);
+  add(cached('acFin', () => new THREE.BoxGeometry(0.7, 0.9, 0.08)), m.stripe, -1.95, 0.5);
+  // Floats under the wings, like a catapult-launched scout plane.
+  for (const z of [-1.1, 1.1]) add(cached('acFloat', () => new THREE.CapsuleGeometry(0.16, 1.6, 2, 6).rotateZ(Math.PI / 2)), white, 0.5, -0.75, z);
+  const prop = add(cached('acProp', () => new THREE.BoxGeometry(0.06, 1.5, 0.12)), dark, 2.4, 0);
+  prop.userData.keep = true;
+  bake(plane, `aircraft-${key}`, SHIP_FINISH);
+  plane.scale.setScalar(AIRCRAFT.scale);
+  plane.userData = { prop };
+  return plane;
 }
