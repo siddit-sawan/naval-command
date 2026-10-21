@@ -193,6 +193,8 @@ function togglePause() {
   else if (state === 'paused') setState('play');
 }
 
+$('menuMuteBtn').addEventListener('click', () => { unlock(); toggleMute(); });
+
 function toggleMute() {
   setMuted(!isMuted());
   hud.setMuted(isMuted());

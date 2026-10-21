@@ -66,6 +66,7 @@ export class Hud {
 
   setMuted(m) {
     this.el.mute.textContent = m ? '🔇' : '🔊';
+    $('menuMuteBtn').textContent = m ? '🔇' : '🔊';
   }
 
   toast(text, color = '#f0b429') {
