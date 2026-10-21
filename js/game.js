@@ -3,6 +3,7 @@ import { rankedDifficulty, UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DI
 import { makeShipModel, makeHarbor, makeOutpost, makeAircraftModel } from './models.js';
 import { ISLANDS, sampleOcean } from './ocean.js';
 import { Effects } from './effects.js';
+import { t } from './i18n.js';
 import { sfx } from '../audio/audio.js';
 import { EnemyAI, FleetAI } from './ai.js';
 
@@ -260,13 +261,13 @@ export class Game {
   // ---------- Commands ----------
 
   queueBuild(team, type) {
-    const t = this.teams[team];
+    const side = this.teams[team];
     const stats = UNITS[type];
-    if (stats.exclusive && (team !== 'player' || !this.up.exclusive.includes(type))) return 'Ship not unlocked';
-    if (t.queue.length >= ECONOMY.maxQueue) return 'Build queue is full';
-    if (t.gold < stats.cost) return 'Not enough gold';
-    t.gold -= stats.cost;
-    t.queue.push(type);
+    if (stats.exclusive && (team !== 'player' || !this.up.exclusive.includes(type))) return t('Ship not unlocked');
+    if (side.queue.length >= ECONOMY.maxQueue) return t('Build queue is full');
+    if (side.gold < stats.cost) return t('Not enough gold');
+    side.gold -= stats.cost;
+    side.queue.push(type);
     return null;
   }
 
@@ -318,11 +319,11 @@ export class Game {
    */
   helmFire(aim, locked = null) {
     const u = this.helm;
-    if (!u || !u.alive) return 'No ship at the helm';
+    if (!u || !u.alive) return t('No ship at the helm');
     const w = u.weapons[u.weaponIdx];
     if (!this.weaponsOnline('player', u.weaponIdx)) {
       const need = DEATHMATCH.unlock[u.weaponIdx];
-      return `Weapon offline: hold ${need} outpost${need > 1 ? 's' : ''} to arm it`;
+      return t(need > 1 ? 'Weapon offline: hold {n} outposts to arm it' : 'Weapon offline: hold {n} outpost to arm it', { n: need });
     }
     if (w.kind === 'aircraft') {
       // First click launches the bomber; after that, clicks send it at the target or point aimed at.
@@ -330,18 +331,18 @@ export class Game {
       if (u.plane) { this.directAircraft(u, order); return null; }
       return this.launchAircraft(u, order);
     }
-    if (u.wcool[u.weaponIdx] > 0) return 'Reloading';
+    if (u.wcool[u.weaponIdx] > 0) return t('Reloading');
     if (w.kind === 'missile') {
-      if (!locked || !locked.alive) return 'Hold the crosshair on an enemy ship to lock on';
-      if (this.distTo(u, locked) > w.range) return 'Target out of missile range';
+      if (!locked || !locked.alive) return t('Hold the crosshair on an enemy ship to lock on');
+      if (this.distTo(u, locked) > w.range) return t('Target out of missile range');
       this.fire(u, locked, w, true);
     } else if (w.kind === 'depth') {
       this.fire(u, u, w, true);
     } else {
       if (!aim) {
-        const t = this.findTarget(u, w.range);
-        if (!t) return 'No target in range';
-        aim = t;
+        const foe = this.findTarget(u, w.range);
+        if (!foe) return t('No target in range');
+        aim = foe;
       }
       if (w.kind === 'shell') {
         // Exactly where aimed, never led: along the crosshair line for a 3D aim point (gravity then
@@ -370,9 +371,9 @@ export class Game {
   // Launch a battleship's scout bomber. order: { target: ship } to bomb, { point } to patrol, or null
   // to hunt on its own. Returns an error message, or null when it took off.
   launchAircraft(ship, order = null) {
-    if (ship.type !== 'battleship' || !ship.alive) return 'Only battleships carry aircraft';
-    if (ship.plane) return 'Aircraft already airborne';
-    if (ship.planeCd > 0) return `Aircraft ready in ${Math.ceil(ship.planeCd)}s`;
+    if (ship.type !== 'battleship' || !ship.alive) return t('Only battleships carry aircraft');
+    if (ship.plane) return t('Aircraft already airborne');
+    if (ship.planeCd > 0) return t('Aircraft ready in {s}s', { s: Math.ceil(ship.planeCd) });
     const mesh = makeAircraftModel(ship.team === 'player' ? this.livery : 'enemy');
     this.root.add(mesh);
     const fx = Math.cos(ship.heading), fz = Math.sin(ship.heading);
@@ -385,7 +386,7 @@ export class Game {
     ship.plane = p;
     ship.planeCd = this.airCooldown(ship);
     sfx.torpedo(this.volumeAt(ship.x, ship.z));
-    if (ship.team === 'player' && !this.demo) this.hooks.toast('Scout bomber launched', TEAM_COLORS.player.css);
+    if (ship.team === 'player' && !this.demo) this.hooks.toast(t('Scout bomber launched'), TEAM_COLORS.player.css);
     return null;
   }
 
@@ -405,9 +406,9 @@ export class Game {
   // One line for the HUD: what a battleship's aircraft is doing.
   planeStatus(ship) {
     if (ship.type !== 'battleship') return null;
-    if (ship.plane) return ship.plane.bombs ? 'Aircraft airborne' : 'Aircraft returning';
-    if (ship.planeCd > 0) return `Aircraft ready in ${Math.ceil(ship.planeCd)}s`;
-    return this.autoLaunches(ship) ? 'Aircraft launching' : 'Aircraft ready (L)';
+    if (ship.plane) return ship.plane.bombs ? t('Aircraft airborne') : t('Aircraft returning');
+    if (ship.planeCd > 0) return t('Aircraft ready in {s}s', { s: Math.ceil(ship.planeCd) });
+    return this.autoLaunches(ship) ? t('Aircraft launching') : t('Aircraft ready (L)');
   }
 
   // Launch cooldowns, and AI battleships launching when there's something to hunt. The player's own
@@ -521,7 +522,7 @@ export class Game {
       if (p.hp <= 0) {
         this.explode(p.x, p.y, p.z, 0.9);
         sfx.explosion(this.volumeAt(p.x, p.z));
-        if (p.team === 'enemy' && !this.demo) this.hooks.toast('Enemy aircraft shot down', TEAM_COLORS.player.css);
+        if (p.team === 'enemy' && !this.demo) this.hooks.toast(t('Enemy aircraft shot down'), TEAM_COLORS.player.css);
         this.removeAircraft(p, true);
         continue;
       }
@@ -630,7 +631,7 @@ export class Game {
       if (!this.aiHold) for (const ai of this.ai) ai.update(dt);
       if (this.manual && (!this.helm || !this.helm.alive)) {
         const next = this.cycleHelm();
-        if (next) this.hooks.toast(`You now command HMS ${next.name}`, TEAM_COLORS.player.css);
+        if (next) this.hooks.toast(t('You now command HMS {name}', { name: next.name }), TEAM_COLORS.player.css);
       }
     }
     this.updateWeather(dt);
@@ -655,10 +656,10 @@ export class Game {
     const level = [...new Set(DEATHMATCH.unlock)].filter((n) => held >= n).length;
     if (level !== this.weaponLevel && !this.over) {
       if (level > this.weaponLevel) {
-        this.hooks.toast(level === 1 ? 'Weapons online! Main armament armed' : 'All weapons online', TEAM_COLORS.player.css);
+        this.hooks.toast(level === 1 ? t('Weapons online! Main armament armed') : t('All weapons online'), TEAM_COLORS.player.css);
         sfx.built();
       } else if (level === 0) {
-        this.hooks.toast('Weapons offline! Retake an outpost', TEAM_COLORS.enemy.css);
+        this.hooks.toast(t('Weapons offline! Retake an outpost'), TEAM_COLORS.enemy.css);
         sfx.lost();
       }
       this.weaponLevel = level;
@@ -674,19 +675,19 @@ export class Game {
   }
 
   updateEconomy(team, dt) {
-    const t = this.teams[team];
-    t.gold += this.incomeOf(team) * dt;
-    if (!t.queue.length) { t.buildT = 0; return; }
+    const side = this.teams[team];
+    side.gold += this.incomeOf(team) * dt;
+    if (!side.queue.length) { side.buildT = 0; return; }
     if (this.alive(team).length >= this.maxShips(team)) return;
-    t.buildT += dt;
-    const type = t.queue[0];
-    if (t.buildT >= this.buildTime(team, type)) {
-      t.queue.shift();
-      t.buildT = 0;
-      t.built++;
+    side.buildT += dt;
+    const type = side.queue[0];
+    if (side.buildT >= this.buildTime(team, type)) {
+      side.queue.shift();
+      side.buildT = 0;
+      side.built++;
       this.spawn(team, type);
       if (team === 'player' && !this.demo) {
-        this.hooks.toast(`${UNITS[type].label} ready`, TEAM_COLORS.player.css);
+        this.hooks.toast(t('{ship} ready', { ship: UNITS[type].label }), TEAM_COLORS.player.css);
         sfx.built();
       }
     }
@@ -696,10 +697,10 @@ export class Game {
     const event = this.weather && this.weather.step(dt);
     if (!event || this.demo || this.over) return;
     if (event === 'front') {
-      this.hooks.toast('Fog is rolling in! Enemies could be anywhere…', '#cfe0ec');
+      this.hooks.toast(t('Fog is rolling in! Enemies could be anywhere…'), '#cfe0ec');
       sfx.foghorn();
     } else {
-      this.hooks.toast('The fog is lifting', '#cfe0ec');
+      this.hooks.toast(t('The fog is lifting'), '#cfe0ec');
     }
   }
 
@@ -726,7 +727,7 @@ export class Game {
       if (u.spotted && !was && u.team === 'enemy' && !u.stats.stealth && !this.demo
         && this.time - this.alerts.fog > 15 && this.time > 2) {
         this.alerts.fog = this.time;
-        this.hooks.toast('Enemy ship sighted in the fog!', TEAM_COLORS.enemy.css);
+        this.hooks.toast(t('Enemy ship sighted in the fog!'), TEAM_COLORS.enemy.css);
       }
     }
   }
@@ -1252,10 +1253,10 @@ export class Game {
     if (e.team === 'player' && !this.demo) {
       if (e.kind === 'harbor' && this.time - this.alerts.harbor > 12) {
         this.alerts.harbor = this.time;
-        this.hooks.toast('Your harbor is under attack!', TEAM_COLORS.enemy.css);
+        this.hooks.toast(t('Your harbor is under attack!'), TEAM_COLORS.enemy.css);
       } else if (e.kind === 'ship' && this.time - this.alerts.unit > 20) {
         this.alerts.unit = this.time;
-        this.hooks.toast('Your fleet is under fire!', TEAM_COLORS.enemy.css);
+        this.hooks.toast(t('Your fleet is under fire!'), TEAM_COLORS.enemy.css);
       }
     }
     if (e.hp > 0) return;
@@ -1368,9 +1369,9 @@ export class Game {
       else if ((o.owner === 'player' && o.progress <= 0) || (o.owner === 'enemy' && o.progress >= 0)) o.owner = null;
 
       if (o.owner !== before && !this.demo) {
-        if (o.owner === 'player') { this.hooks.toast('Outpost captured', TEAM_COLORS.player.css); sfx.captured(); }
-        else if (o.owner === 'enemy') { this.hooks.toast('The enemy captured an outpost', TEAM_COLORS.enemy.css); sfx.lost(); }
-        else if (before === 'player') { this.hooks.toast('Outpost lost', TEAM_COLORS.enemy.css); sfx.lost(); }
+        if (o.owner === 'player') { this.hooks.toast(t('Outpost captured'), TEAM_COLORS.player.css); sfx.captured(); }
+        else if (o.owner === 'enemy') { this.hooks.toast(t('The enemy captured an outpost'), TEAM_COLORS.enemy.css); sfx.lost(); }
+        else if (before === 'player') { this.hooks.toast(t('Outpost lost'), TEAM_COLORS.enemy.css); sfx.lost(); }
       }
 
       const side = o.progress > 0 ? 'player' : 'enemy';

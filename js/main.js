@@ -13,15 +13,18 @@ import { profile } from './profile.js';
 import { createMenus } from './menu.js';
 import { createBridge } from './bridge.js';
 import { createTutorial } from './tutorial.js';
+import { t, upper, translatePage } from './i18n.js';
+
+translatePage(); // static text in index.html
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
 
 // ---------- Graphics quality (chosen in the main menu, remembered per browser) ----------
 const QUALITY = {
-  high: { label: 'High', maxPixelRatio: 2, ocean: 384, particles: 4000 },
-  balanced: { label: 'Balanced', maxPixelRatio: 1.5, ocean: 320, particles: 3000 },
-  performance: { label: 'Performance', maxPixelRatio: 1, ocean: 256, particles: 1800 },
+  high: { label: t('High'), maxPixelRatio: 2, ocean: 384, particles: 4000 },
+  balanced: { label: t('Balanced'), maxPixelRatio: 1.5, ocean: 320, particles: 3000 },
+  performance: { label: t('Performance'), maxPixelRatio: 1, ocean: 256, particles: 1800 },
 };
 const QUALITY_ORDER = ['high', 'balanced', 'performance'];
 let qualityName = 'high';
@@ -181,8 +184,8 @@ function startPlay() {
   setState('play');
   if (tutorial.start(manual() ? 'manual' : 'fleet')) return;
   hud.toast(manual()
-    ? 'Team deathmatch: sink all five enemy ships! Lead your shots · 1-3 weapons'
-    : 'Capture outposts for income. Destroy the enemy harbor!');
+    ? t('Team deathmatch: sink all five enemy ships! Lead your shots · 1-3 weapons')
+    : t('Capture outposts for income. Destroy the enemy harbor!'));
 }
 
 function togglePause() {
@@ -233,15 +236,14 @@ function renderRankedInfo() {
   const el = $('rankedInfo');
   el.classList.toggle('hidden', difficulty !== 'ranked');
   const r = profile.rank();
-  el.innerHTML = `⚔ <b>Ranked War</b>: the enemy grows stronger as you rank up. As a <b>${r.name}</b> you face
-    <b>level ${r.index} / ${RANKED_TOP}</b> and earn <b>×${rankedReward(r.index)}</b> rewards. Fleet battles only.`;
+  el.innerHTML = '⚔ ' + t('<b>Ranked War</b>: the enemy grows stronger as you rank up. As a <b>{rank}</b> you face <b>level {level} / {top}</b> and earn <b>×{mult}</b> rewards. Fleet battles only.', { rank: r.name, level: r.index, top: RANKED_TOP, mult: rankedReward(r.index) });
 }
 profile.onChange(renderRankedInfo);
 renderRankedInfo();
 for (const btn of document.querySelectorAll('#modeRow .diff')) {
   btn.addEventListener('click', () => {
     if (btn.dataset.mode === 'manual' && difficulty === 'ranked') {
-      menus.notify('Ranked War is fleet battles only. Pick Easy, Normal or Hard for Manual.', '#ff5a4f');
+      menus.notify(t('Ranked War is fleet battles only. Pick Easy, Normal or Hard for Manual.'), '#ff5a4f');
       return;
     }
     setMode(btn.dataset.mode);
@@ -256,7 +258,7 @@ for (const btn of document.querySelectorAll('#shipRow .diff')) {
 
 // Graphics setting: the ocean mesh and particle pool are sized at startup, so changing it reloads.
 const gfxBtn = $('gfxBtn');
-gfxBtn.textContent = `Graphics: ${quality.label}`;
+gfxBtn.textContent = t('Graphics: {quality}', { quality: quality.label });
 gfxBtn.addEventListener('click', () => {
   const next = QUALITY_ORDER[(QUALITY_ORDER.indexOf(qualityName) + 1) % QUALITY_ORDER.length];
   try { localStorage.setItem('navalGraphics', next); } catch { /* storage blocked */ }
@@ -318,7 +320,7 @@ const tutorial = createTutorial({
 for (const btn of document.querySelectorAll('[data-tutorial]')) {
   btn.addEventListener('click', () => {
     profile.markTutorial(btn.dataset.tutorial, false);
-    menus.notify(`The ${btn.dataset.tutorial === 'manual' ? 'Manual' : 'Fleet'} tutorial will play next time you start that mode`, '#4cd68a');
+    menus.notify(btn.dataset.tutorial === 'manual' ? t('The Manual tutorial will play next time you start that mode') : t('The Fleet tutorial will play next time you start that mode'), '#4cd68a');
   });
 }
 
@@ -332,7 +334,7 @@ function updateBoost() {
   const wait = Math.ceil(boostReadyAt - game.time);
   boostBtn.disabled = wait > 0 || !!game.over;
   boostBtn.textContent = wait > 0 ? `📺 ${Math.floor(wait / 60)}:${String(wait % 60).padStart(2, '0')}`
-    : game.deathmatch ? '📺 Repair hull' : `📺 +${BOOST_GOLD} ⛃`;
+    : game.deathmatch ? t('📺 Repair hull') : `📺 +${BOOST_GOLD} ⛃`;
 }
 boostBtn.addEventListener('click', async () => {
   if (state !== 'play' || game.time < boostReadyAt) return;
@@ -341,10 +343,10 @@ boostBtn.addEventListener('click', async () => {
   boostReadyAt = g.time + BOOST_COOLDOWN;
   if (g.deathmatch) {
     if (g.helm) g.helm.hp = g.helm.maxHp;
-    hud.toast('Damage control: hull fully repaired', '#4cd68a');
+    hud.toast(t('Damage control: hull fully repaired'), '#4cd68a');
   } else {
     g.teams.player.gold += BOOST_GOLD;
-    hud.toast(`Reinforcement funds: +${BOOST_GOLD} gold`, '#f0b429');
+    hud.toast(t('Reinforcement funds: +{n} gold', { n: BOOST_GOLD }), '#f0b429');
   }
   sfx.built();
 });
@@ -432,7 +434,7 @@ function command(clientX, clientY) {
 // ---------- Manual mode ----------
 function takeHelm(ship) {
   game.setHelm(ship);
-  hud.toast(`You now command HMS ${ship.name}`, '#3fa2ff');
+  hud.toast(t('You now command HMS {name}', { name: ship.name }), '#3fa2ff');
   sfx.click();
 }
 
@@ -451,7 +453,7 @@ function helmClick(clientX, clientY) {
 
 function helmShoot(aim, lockedOn = null) {
   const err = game.helmFire(aim, lockedOn);
-  if (err && err !== 'Reloading') hud.toast(err, '#ff5a4f');
+  if (err && err !== t('Reloading')) hud.toast(err, '#ff5a4f');
   if (err) sfx.denied();
 }
 
@@ -550,7 +552,7 @@ function setView(next) {
     Object.assign(goal, { pitch: 0.32, dist: 85 });
   }
   if (game.helm) game.helm.aimPoint = null;
-  hud.toast(view === 'bridge' ? 'Bridge view' : 'Chase view', '#cfe0ec');
+  hud.toast(view === 'bridge' ? t('Bridge view') : t('Chase view'), '#cfe0ec');
 }
 
 document.addEventListener('pointerlockchange', () => {
@@ -593,38 +595,38 @@ function updateCrosshair(dt) {
   const aim = crosshairAim();
   const dist = aim.range;
   const ready = h.cooldown <= 0;
-  let status = ready ? 'READY' : `RELOAD ${h.cooldown.toFixed(1)}s`;
+  let status = ready ? t('READY') : t('RELOAD {s}s', { s: h.cooldown.toFixed(1) });
   let good = false, far = false;
   if (!game.weaponsOnline('player', h.weaponIdx)) {
     lock.target = null;
     const need = DEATHMATCH.unlock[h.weaponIdx];
-    status = `OFFLINE · HOLD ${need} OUTPOST${need > 1 ? 'S' : ''}`;
+    status = t(need > 1 ? 'OFFLINE · HOLD {n} OUTPOSTS' : 'OFFLINE · HOLD {n} OUTPOST', { n: need });
     far = true;
   } else if (w.kind === 'aircraft') {
     lock.target = null;
-    status = h.plane ? (target ? 'CLICK: BOMB THIS SHIP' : 'CLICK: SEND AIRCRAFT HERE') : ready ? 'CLICK TO LAUNCH' : `READY IN ${Math.ceil(h.cooldown)}s`;
+    status = h.plane ? (target ? t('CLICK: BOMB THIS SHIP') : t('CLICK: SEND AIRCRAFT HERE')) : ready ? t('CLICK TO LAUNCH') : t('READY IN {s}s', { s: Math.ceil(h.cooldown) });
     good = !!h.plane && !!target;
   } else if (w.kind === 'missile') {
     const valid = target && game.distTo(h, target) <= w.range;
     if (valid && lock.target === target) lock.t += state === 'play' ? dt : 0;
     else { lock.target = valid ? target : null; lock.t = 0; }
-    if (lock.target && lock.t >= w.lock) { status = ready ? 'LOCKED · FIRE' : `LOCKED · ${status}`; good = true; }
-    else if (lock.target) status = `LOCKING ${Math.round((lock.t / w.lock) * 100)}%`;
+    if (lock.target && lock.t >= w.lock) { status = ready ? t('LOCKED · FIRE') : t('LOCKED · {status}', { status }); good = true; }
+    else if (lock.target) status = t('LOCKING {n}%', { n: Math.round((lock.t / w.lock) * 100) });
     else far = !!target;
   } else {
     lock.target = null;
-    if (w.kind === 'depth') status = ready ? 'DROP ASTERN' : status;
+    if (w.kind === 'depth') status = ready ? t('DROP ASTERN') : status;
     else {
       far = !!target && dist > w.range;
       good = !!target && !far;
       const eta = dist / (w.kind === 'torpedo' ? w.speed : w.velocity);
-      status = aim.sky ? `RNG — · ${status}` : `RNG ${Math.round(dist)} · ETA ${eta.toFixed(1)}s · ${status}`;
+      status = aim.sky ? t('RNG — · {status}', { status }) : t('RNG {range} · ETA {eta}s · {status}', { range: Math.round(dist), eta: eta.toFixed(1), status });
     }
   }
   crosshair.classList.toggle('lock', good);
   crosshair.classList.toggle('far', far);
   const zoom = FOV / zoomFov;
-  xhInfo.textContent = [w.name.toUpperCase(), status, zoom > 1.1 ? '×' + zoom.toFixed(1) : ''].filter(Boolean).join('  ·  ');
+  xhInfo.textContent = [upper(w.name), status, zoom > 1.1 ? '×' + zoom.toFixed(1) : ''].filter(Boolean).join('  ·  ');
   xhHint.classList.toggle('hidden', locked() || lockFailed || 'ontouchstart' in window);
 }
 
@@ -645,7 +647,7 @@ function updateWeaponPanel() {
   if (panelFor !== h) {
     panelFor = h;
     weaponPanel.innerHTML = h.weapons.map((w, i) => `<button class="weapon-btn" data-i="${i}"><span class="key">${i + 1}</span>
-      <span class="name">${w.name}</span><span class="desc">${w.kind === 'depth' ? 'Drops astern' : `Range ${w.range}`} · ${w.damage} dmg</span><div class="prog"></div></button>`).join('');
+      <span class="name">${w.name}</span><span class="desc">${t('{range} · {damage} dmg', { range: w.kind === 'depth' ? t('Drops astern') : t('Range {n}', { n: w.range }), damage: w.damage })}</span><div class="prog"></div></button>`).join('');
     for (const b of weaponPanel.querySelectorAll('.weapon-btn')) b.addEventListener('click', () => selectWeapon(+b.dataset.i));
   }
   weaponPanel.querySelectorAll('.weapon-btn').forEach((b, i) => {
@@ -655,9 +657,9 @@ function updateWeaponPanel() {
     b.classList.toggle('locked', !online);
     b.querySelector('.prog').style.width = `${(1 - h.wcool[i] / w.reload) * 100}%`;
     const need = DEATHMATCH.unlock[i];
-    const desc = !online ? `🔒 Hold ${need} outpost${need > 1 ? 's' : ''} to arm`
-      : w.kind === 'aircraft' ? (h.plane ? 'Airborne · click to direct' : 'Launch, then click to direct')
-        : `${w.kind === 'depth' ? 'Drops astern' : `Range ${w.range}`} · ${w.damage} dmg`;
+    const desc = !online ? t(need > 1 ? '🔒 Hold {n} outposts to arm' : '🔒 Hold {n} outpost to arm', { n: need })
+      : w.kind === 'aircraft' ? (h.plane ? t('Airborne · click to direct') : t('Launch, then click to direct'))
+        : t('{range} · {damage} dmg', { range: w.kind === 'depth' ? t('Drops astern') : t('Range {n}', { n: w.range }), damage: w.damage });
     const el = b.querySelector('.desc');
     if (el.textContent !== desc) el.textContent = desc;
   });
@@ -666,7 +668,7 @@ const scoreEl = $('score');
 function updateScore() {
   if (!game.deathmatch) return;
   const mine = game.alive('player').length, theirs = game.alive('enemy').length;
-  scoreEl.innerHTML = `<span class="you">⚓ ${mine}</span> vs <span class="foe">${theirs} ⚓</span> · ⚑ ${game.outpostsHeld('player')}/${game.outposts.length} · Sunk ${game.teams.player.kills}`;
+  scoreEl.innerHTML = `<span class="you">⚓ ${mine}</span> ${t('vs')} <span class="foe">${theirs} ⚓</span> · ⚑ ${game.outpostsHeld('player')}/${game.outposts.length} · ${t('Sunk {n}', { n: game.teams.player.kills })}`;
 }
 
 // ---------- Fleet mode: cameras on a selected ship ----------
@@ -680,7 +682,7 @@ const shipCamActive = () => !!game && !manual() && shipCam.mode !== 'overview' &
 
 function setShipCam(mode, ship = shipCam.ship) {
   if (mode !== 'overview' && (!ship || !ship.alive)) {
-    hud.toast('Select one of your ships first', '#ff5a4f');
+    hud.toast(t('Select one of your ships first'), '#ff5a4f');
     return;
   }
   const leaving = shipCam.ship;
@@ -1070,8 +1072,16 @@ canvas.addEventListener('dblclick', (e) => {
 canvas.addEventListener('pointercancel', endPointer);
 
 // ---------- Loop ----------
+// Interface scale: full size on big screens, shrinking when the game sits in a small window (a CrazyGames embed
+// that isn't fullscreen, a phone held sideways) so the HUD doesn't crowd the sea. Used by 'zoom' in style.css.
+function uiScale(w, h) {
+  const s = h > w ? w / 480 : Math.min(w / 1100, h / 650);
+  return Math.round(Math.min(1, Math.max(h > w ? 0.8 : 0.6, s)) * 100) / 100;
+}
+
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
+  document.documentElement.style.setProperty('--ui', uiScale(w, h));
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();

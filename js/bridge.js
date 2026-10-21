@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MAP } from './config.js';
+import { t, upper } from './i18n.js';
 
 // The ship's bridge in first-person view: a wrap-around wheelhouse with tall raked windows on every
 // side, a ceiling with light strips and hanging monitors, wipers, and a low curved console with four
@@ -170,7 +171,7 @@ export function createBridge(scene) {
 
   // Every weapon the ship carries, with the selected one highlighted and its reload bar.
   function paintWeapons(s, helm, game) {
-    frameScreen(s, 'WEAPONS');
+    frameScreen(s, t('WEAPONS'));
     const c = s.ctx;
     const list = helm.weapons || [{ name: helm.stats.weapon === 'torpedo' ? 'Torpedoes' : 'Main guns', reload: helm.stats.reload }];
     const rowH = list.length > 2 ? 58 : 80;
@@ -187,16 +188,16 @@ export function createBridge(scene) {
       c.font = `bold ${sel ? 16 : 14}px Consolas, monospace`;
       c.textAlign = 'left';
       c.fillStyle = sel ? '#e6f2fa' : CYAN;
-      c.fillText(`${i + 1} ${w.name.toUpperCase()}`, 18, y + 20);
+      c.fillText(`${i + 1} ${upper(w.name)}`, 18, y + 20);
       c.textAlign = 'right';
       c.fillStyle = !online ? RED : ready ? GREEN : AMBER;
-      c.fillText(!online ? 'OFFLINE' : ready ? 'READY' : `${cd.toFixed(1)}s`, 302, y + 20);
+      c.fillText(!online ? t('OFFLINE') : ready ? t('READY') : `${cd.toFixed(1)}s`, 302, y + 20);
       bar(c, 18, y + 30, 284, 10, ready ? 1 : 1 - cd / w.reload, ready ? GREEN : AMBER);
     });
   }
 
-  function paintTactical(s, helm, game, t) {
-    frameScreen(s, 'TACTICAL');
+  function paintTactical(s, helm, game, time) {
+    frameScreen(s, t('TACTICAL'));
     const c = s.ctx;
     const cx = 160, cy = 124, r = 86;
     const scale = r / RADAR_RANGE;
@@ -211,7 +212,7 @@ export function createBridge(scene) {
     c.moveTo(cx - r, cy); c.lineTo(cx + r, cy); c.moveTo(cx, cy - r); c.lineTo(cx, cy + r);
     c.stroke();
     // Sweep.
-    const sweep = t * 2.2;
+    const sweep = time * 2.2;
     const g = c.createConicGradient ? c.createConicGradient(sweep - Math.PI / 2, cx, cy) : null;
     if (g) {
       g.addColorStop(0, 'rgba(76,214,138,0.35)');
@@ -265,7 +266,7 @@ export function createBridge(scene) {
   }
 
   function paintNav(s, helm, input) {
-    frameScreen(s, 'NAVIGATION');
+    frameScreen(s, t('NAVIGATION'));
     const c = s.ctx;
     const bearing = ((Math.atan2(Math.cos(helm.heading), -Math.sin(helm.heading)) * 180) / Math.PI + 360) % 360;
     // Heading tape.
@@ -283,7 +284,7 @@ export function createBridge(scene) {
       c.fillRect(x, 70 - (major ? 14 : 7), 1.5, major ? 14 : 7);
       if (major) {
         const v = ((d % 360) + 360) % 360;
-        c.fillText({ 0: 'N', 90: 'E', 180: 'S', 270: 'W' }[v] || String(v).padStart(3, '0'), x, 50);
+        c.fillText({ 0: t('N'), 90: t('E'), 180: t('S'), 270: t('W') }[v] || String(v).padStart(3, '0'), x, 50);
       }
     }
     c.restore();
@@ -300,20 +301,20 @@ export function createBridge(scene) {
     c.font = '13px Consolas, monospace';
     c.fillStyle = DIM;
     c.textAlign = 'left';
-    c.fillText('HEADING', 22, 144);
+    c.fillText(t('HEADING'), 22, 144);
     c.textAlign = 'right';
-    c.fillText(helm.speed < -0.2 ? 'SPEED (ASTERN)' : 'SPEED', 298, 144);
+    c.fillText(helm.speed < -0.2 ? t('SPEED (ASTERN)') : t('SPEED'), 298, 144);
     // Engine order and rudder.
     c.textAlign = 'left';
     c.fillStyle = CYAN;
-    c.fillText('ENGINE', 22, 172);
-    const order = input.throttle > 0 ? 'FULL AHEAD' : input.throttle < 0 ? 'ASTERN' : 'STOP';
+    c.fillText(t('ENGINE'), 22, 172);
+    const order = input.throttle > 0 ? t('FULL AHEAD') : input.throttle < 0 ? t('ASTERN') : t('STOP');
     c.fillStyle = input.throttle > 0 ? GREEN : input.throttle < 0 ? RED : AMBER;
     c.font = 'bold 15px Consolas, monospace';
     c.fillText(order, 90, 172);
     c.font = '13px Consolas, monospace';
     c.fillStyle = CYAN;
-    c.fillText('RUDDER', 22, 200);
+    c.fillText(t('RUDDER'), 22, 200);
     bar(c, 90, 189, 200, 14, 0, GREEN);
     c.fillStyle = AMBER;
     c.fillRect(190 + input.rudder * 96 - 3, 187, 6, 18);
@@ -322,18 +323,18 @@ export function createBridge(scene) {
   }
 
   function paintStatus(s, helm, game) {
-    frameScreen(s, 'STATUS');
+    frameScreen(s, t('STATUS'));
     const c = s.ctx;
     const hp = helm.hp / helm.maxHp;
     c.font = 'bold 18px Consolas, monospace';
     c.fillStyle = '#e6f2fa';
     c.textAlign = 'left';
-    c.fillText(`HMS ${helm.name || ''}`.toUpperCase(), 14, 56);
+    c.fillText(upper(t('HMS {name}', { name: helm.name || '' })), 14, 56);
     c.font = '13px Consolas, monospace';
     c.fillStyle = DIM;
-    c.fillText(helm.stats.label.toUpperCase(), 14, 74);
+    c.fillText(upper(helm.stats.label), 14, 74);
     c.fillStyle = CYAN;
-    c.fillText('HULL INTEGRITY', 14, 104);
+    c.fillText(t('HULL INTEGRITY'), 14, 104);
     const col = hp > 0.6 ? GREEN : hp > 0.3 ? AMBER : RED;
     bar(c, 14, 112, 292, 20, hp, col);
     c.font = 'bold 16px Consolas, monospace';
@@ -345,13 +346,13 @@ export function createBridge(scene) {
     c.fillStyle = CYAN;
     const fleet = game.alive('player').length;
     const owned = game.outposts.filter((o) => o.owner === 'player').length;
-    c.fillText(`FLEET     ${fleet} SHIPS`, 14, 160);
-    c.fillText(`OUTPOSTS  ${owned} / ${game.outposts.length}`, 14, 180);
-    c.fillText(`TREASURY  ${Math.floor(game.teams.player.gold)}`, 14, 200);
+    c.fillText(`${t('FLEET')}     ${fleet} ${t('SHIPS')}`, 14, 160);
+    c.fillText(`${t('OUTPOSTS')}  ${owned} / ${game.outposts.length}`, 14, 180);
+    c.fillText(`${t('TREASURY')}  ${Math.floor(game.teams.player.gold)}`, 14, 200);
     if (game.weather && game.weather.mist > 0.5) {
       c.fillStyle = AMBER;
       c.textAlign = 'right';
-      c.fillText('FOG', 306, 200);
+      c.fillText(t('FOG'), 306, 200);
     }
   }
 
@@ -363,7 +364,7 @@ export function createBridge(scene) {
      * visible: bridge view active. eye: world position of the eye; helm: the ship (its mesh gives the
      * orientation, so the wheelhouse pitches and rolls with the hull).
      */
-    update(visible, helm, eye, game, input, t, dt) {
+    update(visible, helm, eye, game, input, time, dt) {
       group.visible = visible;
       if (!visible) return;
       group.position.copy(eye);
@@ -374,7 +375,7 @@ export function createBridge(scene) {
       if (paintT > 0) return;
       paintT = 0.12;
       paintWeapons(screens[0], helm, game);
-      paintTactical(screens[1], helm, game, t);
+      paintTactical(screens[1], helm, game, time);
       paintNav(screens[2], helm, input);
       paintStatus(screens[3], helm, game);
       for (const s of screens) s.tex.needsUpdate = true;

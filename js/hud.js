@@ -1,7 +1,9 @@
 import { UNITS, UNIT_ORDER, ECONOMY, MAP, TEAM_COLORS, CAPTURE } from './config.js';
 
+import { t, upper } from './i18n.js';
+
 const $ = (id) => document.getElementById(id);
-const STATUS = { idle: 'Holding position', move: 'Under way', attack: 'Attacking', attackmove: 'Attack-moving' };
+const STATUS = { idle: t('Holding position'), move: t('Under way'), attack: t('Attacking'), attackmove: t('Attack-moving') };
 const MINI = MAP.bounds + 30;
 
 export class Hud {
@@ -55,7 +57,7 @@ export class Hud {
       const btn = document.createElement('button');
       btn.className = 'unit-btn exclusive';
       btn.dataset.unit = type;
-      btn.innerHTML = `<span class="key">${UNIT_ORDER.length + 1 + i}</span><span class="name">${u.label}</span><span class="cost">⛃ ${u.cost}</span><span class="desc">Exclusive</span><div class="prog"></div>`;
+      btn.innerHTML = `<span class="key">${UNIT_ORDER.length + 1 + i}</span><span class="name">${u.label}</span><span class="cost">⛃ ${u.cost}</span><span class="desc">${t('Exclusive')}</span><div class="prog"></div>`;
       btn.addEventListener('click', () => this.onBuild(type));
       $('build').appendChild(btn);
       this.buttons[type] = { btn, prog: btn.querySelector('.prog') };
@@ -95,8 +97,8 @@ export class Hud {
     if (team.queue.length) {
       const capped = game.alive('player').length >= game.maxShips('player');
       this.el.queue.textContent = capped
-        ? `Fleet at maximum size (${game.maxShips('player')})`
-        : `Building ${UNITS[current].label}${team.queue.length > 1 ? ` · ${team.queue.length - 1} more queued` : ''}`;
+        ? t('Fleet at maximum size ({n})', { n: game.maxShips('player') })
+        : t('Building {ship}', { ship: UNITS[current].label }) + (team.queue.length > 1 ? t(' · {n} more queued', { n: team.queue.length - 1 }) : '');
       this.el.queue.classList.remove('hidden');
     } else {
       this.el.queue.classList.add('hidden');
@@ -116,31 +118,31 @@ export class Hud {
 
   renderSelection(game, sel) {
     if (!sel.length) {
-      this.setPanel('No selection', 'muted', game.manual
-        ? 'No ships left. Build one to take the helm.'
-        : 'Click a ship, or drag to select a group.<br>Right-click water to move, an enemy to attack.');
+      this.setPanel(t('No selection'), 'muted', game.manual
+        ? t('No ships left. Build one to take the helm.')
+        : t('Click a ship, or drag to select a group.') + '<br>' + t('Right-click water to move, an enemy to attack.'));
       return;
     }
     if (sel.length === 1) {
       const u = sel[0];
       const s = u.stats;
       const engaged = u.engage && game.distTo(u, u.engage) <= s.range;
-      let status = engaged && u.mode !== 'attack' ? 'Engaging' : STATUS[u.mode];
+      let status = engaged && u.mode !== 'attack' ? t('Engaging') : STATUS[u.mode];
       if (u === game.helm) {
-        const weapon = u.weapons ? u.weapons[u.weaponIdx].name : s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns';
-        status = `At the helm · ${u.cooldown > 0 ? 'Reloading…' : `<span style="color:var(--green)">${weapon} ready</span>`}`;
+        const weapon = u.weapons ? u.weapons[u.weaponIdx].name : s.weapon === 'torpedo' ? t('Torpedoes') : t('Guns');
+        status = t('At the helm') + ' · ' + (u.cooldown > 0 ? t('Reloading…') : `<span style="color:var(--green)">${t('{weapon} ready', { weapon })}</span>`);
       }
       const plane = game.planeStatus(u);
-      this.setPanel(`HMS ${u.name}`, '', `<div class="muted">${s.label} · ${status}</div>${plane ? `<div class="muted">✈ ${plane}</div>` : ''}
+      this.setPanel(t('HMS {name}', { name: u.name }), '', `<div class="muted">${s.label} · ${status}</div>${plane ? `<div class="muted">✈ ${plane}</div>` : ''}
         <div class="hpbar"><div style="width:${Math.round((u.hp / u.maxHp) * 100)}%"></div></div>
-        Hull ${Math.ceil(u.hp)}/${u.maxHp} · ${(u.speed * 2).toFixed(0)} kn<br>
-        <span class="muted">Range ${s.range} · ${s.weapon === 'torpedo' ? 'Torpedoes' : 'Guns'} ${s.damage}${s.stealth ? '<br>Hidden unless enemies are close' : ''}${s.subBonus ? '<br>Hunts submarines' : ''}</span>`);
+        ${t('Hull {hp}/{max} · {kn} kn', { hp: Math.ceil(u.hp), max: u.maxHp, kn: (u.speed * 2).toFixed(0) })}<br>
+        <span class="muted">${t('Range {range} · {weapon} {damage}', { range: s.range, weapon: s.weapon === 'torpedo' ? t('Torpedoes') : t('Guns'), damage: s.damage })}${s.stealth ? '<br>' + t('Hidden unless enemies are close') : ''}${s.subBonus ? '<br>' + t('Hunts submarines') : ''}</span>`);
       return;
     }
     const counts = {};
     for (const u of sel) counts[u.stats.label] = (counts[u.stats.label] || 0) + 1;
     const hp = sel.reduce((s, u) => s + u.hp, 0) / sel.reduce((s, u) => s + u.maxHp, 0);
-    this.setPanel(`${sel.length} ships selected`, '', `<div class="muted">${Object.entries(counts).map(([k, n]) => `${n} ${k}${n > 1 ? 's' : ''}`).join(', ')}</div>
+    this.setPanel(t('{n} ships selected', { n: sel.length }), '', `<div class="muted">${Object.entries(counts).map(([k, n]) => `${n} × ${k}`).join(', ')}</div>
       <div class="hpbar"><div style="width:${Math.round(hp * 100)}%"></div></div>`);
   }
 
@@ -223,16 +225,16 @@ export class Hud {
   showGameOver(game, winner) {
     const won = winner === 'player';
     const text = $('resultText');
-    text.textContent = won ? 'Victory' : 'Defeat';
+    text.textContent = won ? t('Victory') : t('Defeat');
     text.className = `result ${won ? 'win' : 'lose'}`;
     const p = game.teams.player;
     const secs = Math.floor(game.time);
     $('resultStats').innerHTML = [
-      `Battle time: ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`,
-      `Ships built: ${p.built}`,
-      `Enemy ships sunk: ${p.kills}`,
-      `Ships lost: ${p.lost}`,
-      `Outposts held: ${game.outposts.filter((o) => o.owner === 'player').length} / ${game.outposts.length}`,
+      t('Battle time: {time}', { time: `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` }),
+      t('Ships built: {n}', { n: p.built }),
+      t('Enemy ships sunk: {n}', { n: p.kills }),
+      t('Ships lost: {n}', { n: p.lost }),
+      t('Outposts held: {n} / {total}', { n: game.outposts.filter((o) => o.owner === 'player').length, total: game.outposts.length }),
     ].join('<br>');
   }
 }

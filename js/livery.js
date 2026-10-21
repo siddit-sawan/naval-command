@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { t } from './i18n.js';
 import { mulberry32 } from './scenery.js';
 
 // Painted liveries, drawn once per ship class and scheme onto canvases.
@@ -10,48 +11,48 @@ import { mulberry32 } from './scenery.js';
  */
 export const LIVERIES = {
   dazzle: {
-    name: 'Atlantic Dazzle', price: 0, style: 'dazzle', bow: 'chevron', deck: 'star',
+    name: t('Atlantic Dazzle'), price: 0, style: 'dazzle', bow: 'chevron', deck: 'star',
     base: '#5d7a96', camo: ['#1f3348', '#c9d6df', '#8fa6ba', '#3d5a78', '#e6edf2'], accent: '#3fa2ff',
-    desc: 'Standard issue. Bold panels confuse enemy rangefinders.',
+    desc: t('Standard issue. Bold panels confuse enemy rangefinders.'),
   },
   arctic: {
-    name: 'Arctic Splinter', price: 300, style: 'splinter', bow: 'chevron', deck: 'star',
+    name: t('Arctic Splinter'), price: 300, style: 'splinter', bow: 'chevron', deck: 'star',
     base: '#d6dfe5', camo: ['#ffffff', '#9fb0bd', '#6b7d8b', '#c4d0d8', '#3e4c57'], accent: '#5cc8ff',
-    desc: 'Ice-white shards for northern convoys.',
+    desc: t('Ice-white shards for northern convoys.'),
   },
   jungle: {
-    name: 'Jungle Raider', price: 450, style: 'blotch', bow: null, deck: 'star',
+    name: t('Jungle Raider'), price: 450, style: 'blotch', bow: null, deck: 'star',
     base: '#4f5f3a', camo: ['#2f3a22', '#7a8a4f', '#a59a6a', '#1e2416'], accent: '#c8e05a',
-    desc: 'River-patrol greens that melt into the shoreline.',
+    desc: t('River-patrol greens that melt into the shoreline.'),
   },
   desert: {
-    name: 'Desert Storm', price: 600, style: 'blotch', bow: 'chevron', deck: 'star',
+    name: t('Desert Storm'), price: 600, style: 'blotch', bow: 'chevron', deck: 'star',
     base: '#c2a676', camo: ['#a88a5c', '#e0cba0', '#8c6f47', '#d6b98a'], accent: '#e0772c',
-    desc: 'Sun-bleached sand for gulf operations.',
+    desc: t('Sun-bleached sand for gulf operations.'),
   },
   royal: {
-    name: 'Royal Classic', price: 750, style: 'classic', bow: null, deck: 'bars',
+    name: t('Royal Classic'), price: 750, style: 'classic', bow: null, deck: 'bars',
     base: '#8f979e', camo: ['#2b2f33', '#e8ecef'], accent: '#d8343a',
-    desc: 'Parade-ground grey with a gleaming white sheer and red boot-topping.',
+    desc: t('Parade-ground grey with a gleaming white sheer and red boot-topping.'),
   },
   midnight: {
-    name: 'Midnight Gold', price: 1000, style: 'pinstripe', bow: 'chevron', deck: 'star',
+    name: t('Midnight Gold'), price: 1000, style: 'pinstripe', bow: 'chevron', deck: 'star',
     base: '#16191e', camo: ['#22262c', '#0e1013'], accent: '#f0b429',
-    desc: 'Black hull, gold trim. For captains who want to be noticed.',
+    desc: t('Black hull, gold trim. For captains who want to be noticed.'),
   },
   tiger: {
-    name: 'Tiger Shark', price: 1500, style: 'tiger', bow: 'shark', deck: 'bars',
+    name: t('Tiger Shark'), price: 1500, style: 'tiger', bow: 'shark', deck: 'bars',
     base: '#e0772c', camo: ['#14110e'], accent: '#ffb347',
-    desc: 'Orange stripes and a mouthful of teeth.',
+    desc: t('Orange stripes and a mouthful of teeth.'),
   },
   neon: {
-    name: 'Neon Strike', ads: 3, style: 'digital', bow: 'chevron', deck: 'star',
+    name: t('Neon Strike'), ads: 3, style: 'digital', bow: 'chevron', deck: 'star',
     base: '#1b1030', camo: ['#ff3df2', '#3df2ff', '#2a1850', '#7b2cff', '#120a22'], accent: '#ff3df2',
-    desc: 'Digital camo straight out of an arcade. Unlock by watching ads.',
+    desc: t('Digital camo straight out of an arcade. Unlock by watching ads.'),
   },
   // The enemy fleet's scheme; not for sale.
   enemy: {
-    name: 'Crimson Fleet', hidden: true, style: 'splinter', bow: 'shark', deck: 'bars', hazard: true,
+    name: t('Crimson Fleet'), hidden: true, style: 'splinter', bow: 'shark', deck: 'bars', hazard: true,
     base: '#5e3434', camo: ['#2b2b2e', '#8c4a44', '#3a1f1f', '#a8645a', '#4a4446'], accent: '#ff5a4f',
     outline: '#7d0b0b',
   },

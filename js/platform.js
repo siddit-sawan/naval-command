@@ -88,3 +88,11 @@ function placeholderAd(type) {
     }
   });
 }
+
+// The player's language as the CrazyGames SDK reports it (e.g. "pt-BR"), or null if the SDK isn't available
+// within `timeoutMs`. Used to pick the game's language before the interface is built.
+export function sdkLocale(timeoutMs = 1500) {
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
+  const ask = sdkReady.then((ok) => (ok ? window.CrazyGames.SDK.user?.systemInfo?.locale || null : null)).catch(() => null);
+  return Promise.race([ask, timeout]);
+}

@@ -11,7 +11,7 @@ const result = await build({
   bundle: true,
   minify: true,
   format: 'esm',
-  target: 'es2020',
+  target: 'es2022',
   outfile: 'dist/game.js',
   metafile: true,
 });

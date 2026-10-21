@@ -1,4 +1,5 @@
 import { UPGRADES, UNITS, rankedReward } from './config.js';
+import { t } from './i18n.js';
 
 // The player's saved progress: coins, rank, owned liveries, stats and the daily reward streak.
 // Stored in localStorage; if storage is blocked the profile simply lasts for this session.
@@ -6,16 +7,16 @@ import { UPGRADES, UNITS, rankedReward } from './config.js';
 const KEY = 'navalProfile';
 
 export const RANKS = [
-  { name: 'Cadet', xp: 0 },
-  { name: 'Ensign', xp: 250 },
-  { name: 'Lieutenant', xp: 700 },
-  { name: 'Lt. Commander', xp: 1500 },
-  { name: 'Commander', xp: 3000 },
-  { name: 'Captain', xp: 5500 },
-  { name: 'Commodore', xp: 9000 },
-  { name: 'Rear Admiral', xp: 14000 },
-  { name: 'Admiral', xp: 21000 },
-  { name: 'Fleet Admiral', xp: 30000 },
+  { name: t('Cadet'), xp: 0 },
+  { name: t('Ensign'), xp: 250 },
+  { name: t('Lieutenant'), xp: 700 },
+  { name: t('Lt. Commander'), xp: 1500 },
+  { name: t('Commander'), xp: 3000 },
+  { name: t('Captain'), xp: 5500 },
+  { name: t('Commodore'), xp: 9000 },
+  { name: t('Rear Admiral'), xp: 14000 },
+  { name: t('Admiral'), xp: 21000 },
+  { name: t('Fleet Admiral'), xp: 30000 },
 ];
 
 // Coins per match, by difficulty.
@@ -152,13 +153,13 @@ export const profile = {
     const ranked = result.difficulty === 'ranked';
     const m = ranked ? rankedReward(result.rank) : DIFF_MULT[result.difficulty] || 1;
     const lines = [
-      ['Service pay', 25],
-      ['Enemy ships sunk', result.sunk * 8],
-      ['Outposts held', result.outposts * 12],
+      [t('Service pay'), 25],
+      [t('Enemy ships sunk'), result.sunk * 8],
+      [t('Outposts held'), result.outposts * 12],
     ];
-    if (result.won) lines.push(['Victory', 120]);
-    if (ranked) lines.push([`Ranked War, enemy level ${result.rank} ×${m}`, null]);
-    else if (m !== 1) lines.push([`${result.difficulty[0].toUpperCase()}${result.difficulty.slice(1)} difficulty ×${m}`, null]);
+    if (result.won) lines.push([t('Victory'), 120]);
+    if (ranked) lines.push([t('Ranked War, enemy level {rank} ×{m}', { rank: result.rank, m }), null]);
+    else if (m !== 1) lines.push([t('{level} difficulty ×{m}', { level: t(result.difficulty[0].toUpperCase() + result.difficulty.slice(1)), m }), null]);
     const total = Math.round(lines.reduce((s, [, v]) => s + (v || 0), 0) * m);
     const s = data.stats;
     s.games++;

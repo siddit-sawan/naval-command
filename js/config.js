@@ -1,20 +1,22 @@
+import { t } from './i18n.js';
+
 // Gameplay tuning and map layout. Distances are world units (a destroyer is ~24 long), times are seconds.
 
 export const UNITS = {
   corvette: {
-    label: 'Corvette', cost: 60, build: 5, hp: 140, speed: 16, turn: 1.1, size: 14,
+    label: t('Corvette'), cost: 60, build: 5, hp: 140, speed: 16, turn: 1.1, size: 14,
     weapon: 'gun', range: 45, damage: 9, reload: 0.9, detect: 40,
   },
   destroyer: {
-    label: 'Destroyer', cost: 120, build: 8, hp: 300, speed: 12, turn: 0.7, size: 24,
+    label: t('Destroyer'), cost: 120, build: 8, hp: 300, speed: 12, turn: 0.7, size: 24,
     weapon: 'gun', range: 60, damage: 20, reload: 1.4, detect: 75, subBonus: 2,
   },
   submarine: {
-    label: 'Submarine', cost: 150, build: 10, hp: 200, speed: 9, turn: 0.6, size: 18,
+    label: t('Submarine'), cost: 150, build: 10, hp: 200, speed: 9, turn: 0.6, size: 18,
     weapon: 'torpedo', range: 65, damage: 75, reload: 4, detect: 35, stealth: true,
   },
   battleship: {
-    label: 'Battleship', cost: 280, build: 14, hp: 750, speed: 7, turn: 0.4, size: 34,
+    label: t('Battleship'), cost: 280, build: 14, hp: 750, speed: 7, turn: 0.4, size: 34,
     weapon: 'gun', range: 95, damage: 50, reload: 3.2, detect: 45, splash: 10,
   },
 };
@@ -25,22 +27,22 @@ export const UNIT_ORDER = ['corvette', 'destroyer', 'submarine', 'battleship'];
 // `scale`, and its livery. Only the player can field them.
 export const EXCLUSIVES = {
   raider: {
-    label: 'Raider', exclusive: true, base: 'corvette', scale: 1.15, shopPrice: 500, blurb: 'Fast gunboat that runs rings around anything.',
+    label: t('Raider'), exclusive: true, base: 'corvette', scale: 1.15, shopPrice: 500, blurb: t('Fast gunboat that runs rings around anything.'),
     cost: 140, build: 6, hp: 260, speed: 22, turn: 1.4, size: 16,
     weapon: 'gun', range: 55, damage: 14, reload: 0.6, detect: 50,
   },
   cruiser: {
-    label: 'Cruiser', exclusive: true, base: 'destroyer', scale: 1.3, shopPrice: 800, blurb: 'Armoured, long-ranged and hard-hitting. Also hunts subs.',
+    label: t('Cruiser'), exclusive: true, base: 'destroyer', scale: 1.3, shopPrice: 800, blurb: t('Armoured, long-ranged and hard-hitting. Also hunts subs.'),
     cost: 230, build: 11, hp: 520, speed: 12, turn: 0.6, size: 31,
     weapon: 'gun', range: 76, damage: 30, reload: 1.2, detect: 85, subBonus: 2,
   },
   phantom: {
-    label: 'Phantom', exclusive: true, base: 'submarine', scale: 1.25, shopPrice: 1200, blurb: 'Silent, quick, and its torpedoes hit like a freight train.',
+    label: t('Phantom'), exclusive: true, base: 'submarine', scale: 1.25, shopPrice: 1200, blurb: t('Silent, quick, and its torpedoes hit like a freight train.'),
     cost: 330, build: 12, hp: 280, speed: 12, turn: 0.7, size: 22,
     weapon: 'torpedo', range: 82, damage: 120, reload: 3, detect: 45, stealth: true,
   },
   dreadnought: {
-    label: 'Dreadnought', exclusive: true, base: 'battleship', scale: 1.35, shopPrice: 2500, blurb: 'The ultimate capital ship. Also launches a scout bomber.',
+    label: t('Dreadnought'), exclusive: true, base: 'battleship', scale: 1.35, shopPrice: 2500, blurb: t('The ultimate capital ship. Also launches a scout bomber.'),
     cost: 600, build: 20, hp: 1500, speed: 6.5, turn: 0.35, size: 46,
     weapon: 'gun', range: 115, damage: 85, reload: 3.2, detect: 55, splash: 14,
   },
@@ -61,12 +63,12 @@ export const ECONOMY = {
 // Permanent upgrades bought with coins in the shop's Upgrades tab. Each level costs the next entry in `costs`;
 // `per` is the bonus gained per level (see profile.upgradeEffects). They only apply to the player in real matches.
 export const UPGRADES = {
-  income: { name: 'Treasury', icon: '⛃', desc: 'Every outpost and harbor pays more gold.', per: '+10% income', costs: [150, 300, 500, 800, 1200] },
-  gold: { name: 'War Chest', icon: '💰', desc: 'Start every match with extra gold.', per: '+75 starting gold', costs: [120, 250, 450, 700] },
-  fleet: { name: 'Reinforcements', icon: '⚓', desc: 'Extra ships sail out with your fleet at the start of a fleet battle.', per: '+1 ship', costs: [200, 400, 700, 1100], ships: ['corvette', 'destroyer', 'submarine', 'battleship'] },
-  yard: { name: 'Shipwrights', icon: '🔧', desc: 'Ships finish building sooner.', per: '-8% build time', costs: [150, 300, 550, 900] },
-  armor: { name: 'Hull Plating', icon: '🛡', desc: 'Every ship you field is tougher.', per: '+10% hull', costs: [200, 400, 700, 1100] },
-  cap: { name: 'Fleet Command', icon: '🚩', desc: 'Raise the maximum size of your fleet.', per: '+2 max ships', costs: [250, 500, 900] },
+  income: { name: t('Treasury'), icon: '⛃', desc: t('Every outpost and harbor pays more gold.'), per: t('+10% income'), costs: [150, 300, 500, 800, 1200] },
+  gold: { name: t('War Chest'), icon: '💰', desc: t('Start every match with extra gold.'), per: t('+75 starting gold'), costs: [120, 250, 450, 700] },
+  fleet: { name: t('Reinforcements'), icon: '⚓', desc: t('Extra ships sail out with your fleet at the start of a fleet battle.'), per: t('+1 ship'), costs: [200, 400, 700, 1100], ships: ['corvette', 'destroyer', 'submarine', 'battleship'] },
+  yard: { name: t('Shipwrights'), icon: '🔧', desc: t('Ships finish building sooner.'), per: t('-8% build time'), costs: [150, 300, 550, 900] },
+  armor: { name: t('Hull Plating'), icon: '🛡', desc: t('Every ship you field is tougher.'), per: t('+10% hull'), costs: [200, 400, 700, 1100] },
+  cap: { name: t('Fleet Command'), icon: '🚩', desc: t('Raise the maximum size of your fleet.'), per: t('+2 max ships'), costs: [250, 500, 900] },
 };
 export const UPGRADE_ORDER = ['income', 'gold', 'fleet', 'yard', 'armor', 'cap'];
 
@@ -156,22 +158,22 @@ export const AIRCRAFT = {
  */
 export const LOADOUTS = {
   corvette: [
-    { name: 'Autocannon', kind: 'shell', range: 220, damage: 6, reload: 0.3, velocity: 330, spread: 2 },
-    { name: 'Anti-ship missile', kind: 'missile', range: 480, damage: 65, reload: 8, speed: 75, lock: 1.2 },
+    { name: t('Autocannon'), kind: 'shell', range: 220, damage: 6, reload: 0.3, velocity: 330, spread: 2 },
+    { name: t('Anti-ship missile'), kind: 'missile', range: 480, damage: 65, reload: 8, speed: 75, lock: 1.2 },
   ],
   destroyer: [
-    { name: '5-inch gun', kind: 'shell', range: 340, damage: 24, reload: 1.6, velocity: 300, spread: 3 },
-    { name: 'Torpedo spread', kind: 'torpedo', range: 320, damage: 80, reload: 10, speed: 30, count: 3, fan: 0.1 },
-    { name: 'Depth charges', kind: 'depth', range: 0, damage: 90, reload: 7, radius: 24 },
+    { name: t('5-inch gun'), kind: 'shell', range: 340, damage: 24, reload: 1.6, velocity: 300, spread: 3 },
+    { name: t('Torpedo spread'), kind: 'torpedo', range: 320, damage: 80, reload: 10, speed: 30, count: 3, fan: 0.1 },
+    { name: t('Depth charges'), kind: 'depth', range: 0, damage: 90, reload: 7, radius: 24 },
   ],
   battleship: [
-    { name: '16-inch main battery', kind: 'shell', range: 560, damage: 84, reload: 6, velocity: 320, spread: 7, splash: 12 },
-    { name: 'Secondary guns', kind: 'shell', range: 240, damage: 14, reload: 1.1, velocity: 290, spread: 3 },
-    { name: 'Scout bomber', kind: 'aircraft', range: 600, damage: 70, reload: 45 },
+    { name: t('16-inch main battery'), kind: 'shell', range: 560, damage: 84, reload: 6, velocity: 320, spread: 7, splash: 12 },
+    { name: t('Secondary guns'), kind: 'shell', range: 240, damage: 14, reload: 1.1, velocity: 290, spread: 3 },
+    { name: t('Scout bomber'), kind: 'aircraft', range: 600, damage: 70, reload: 45 },
   ],
   submarine: [
-    { name: 'Heavy torpedo', kind: 'torpedo', range: 460, damage: 120, reload: 7, speed: 34, count: 1 },
-    { name: 'Deck gun', kind: 'shell', range: 160, damage: 9, reload: 1.3, velocity: 250, spread: 2.5 },
+    { name: t('Heavy torpedo'), kind: 'torpedo', range: 460, damage: 120, reload: 7, speed: 34, count: 1 },
+    { name: t('Deck gun'), kind: 'shell', range: 160, damage: 9, reload: 1.3, velocity: 250, spread: 2.5 },
   ],
 };
 
