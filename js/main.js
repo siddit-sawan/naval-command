@@ -6,7 +6,7 @@ import { Effects } from './effects.js';
 import { Game, warmupMeshes } from './game.js';
 import { createWeather } from './fog.js';
 import { Hud } from './hud.js';
-import { UNITS, UNIT_ORDER, MAP, DEATHMATCH } from './config.js';
+import { UNITS, UNIT_ORDER, EXCLUSIVE_ORDER, MAP, DEATHMATCH, rankedReward, RANKED_TOP } from './config.js';
 import { sfx, unlock, setMuted, isMuted } from './audio.js';
 import { sdk, showAd, isAdRunning } from './platform.js';
 import { profile } from './profile.js';
@@ -130,6 +130,8 @@ function newGame(demo) {
     flagship,
     weather,
     livery: profile.data.livery,
+    upgrades: profile.upgradeEffects(),
+    rankLevel: profile.rank().index,
     hooks: {
       toast: (text, color) => hud.toast(text, color),
       onGameOver: (winner) => {
@@ -170,6 +172,7 @@ function startPlay() {
   menus.closeModals();
   boostReadyAt = BOOST_FIRST;
   newGame(false);
+  hud.setExclusives(ownedExclusives());
   cam.yaw = Math.atan2(Math.sin(cam.yaw), Math.cos(cam.yaw));
   Object.assign(goal, { x: HOME.x, z: HOME.z, yaw: 0, pitch: DEFAULT_PITCH, dist: 170 });
   view = 'bridge';
@@ -216,13 +219,32 @@ for (const btn of document.querySelectorAll('#diffRow .diff')) {
   btn.addEventListener('click', () => {
     difficulty = btn.dataset.diff;
     document.querySelectorAll('#diffRow .diff').forEach((b) => b.classList.toggle('active', b === btn));
+    if (difficulty === 'ranked') setMode('fleet'); // Ranked War is a fleet battle
+    renderRankedInfo();
   });
 }
+function setMode(next) {
+  mode = next;
+  document.querySelectorAll('#modeRow .diff').forEach((b) => b.classList.toggle('active', b.dataset.mode === next));
+  $('shipRow').classList.toggle('hidden', mode !== 'manual');
+}
+// Tells the player how hard Ranked War will be at their current rank.
+function renderRankedInfo() {
+  const el = $('rankedInfo');
+  el.classList.toggle('hidden', difficulty !== 'ranked');
+  const r = profile.rank();
+  el.innerHTML = `⚔ <b>Ranked War</b>: the enemy grows stronger as you rank up. As a <b>${r.name}</b> you face
+    <b>level ${r.index} / ${RANKED_TOP}</b> and earn <b>×${rankedReward(r.index)}</b> rewards. Fleet battles only.`;
+}
+profile.onChange(renderRankedInfo);
+renderRankedInfo();
 for (const btn of document.querySelectorAll('#modeRow .diff')) {
   btn.addEventListener('click', () => {
-    mode = btn.dataset.mode;
-    document.querySelectorAll('#modeRow .diff').forEach((b) => b.classList.toggle('active', b === btn));
-    $('shipRow').classList.toggle('hidden', mode !== 'manual');
+    if (btn.dataset.mode === 'manual' && difficulty === 'ranked') {
+      menus.notify('Ranked War is fleet battles only. Pick Easy, Normal or Hard for Manual.', '#ff5a4f');
+      return;
+    }
+    setMode(btn.dataset.mode);
   });
 }
 for (const btn of document.querySelectorAll('#shipRow .diff')) {
@@ -248,6 +270,8 @@ let lastNeedle = null;
 // ---------- Selection & orders ----------
 const playerShips = () => (game ? game.alive('player') : []);
 const selectedShips = () => playerShips().filter((s) => s.selected);
+
+const ownedExclusives = () => EXCLUSIVE_ORDER.filter((id) => profile.ownsShip(id));
 
 function build(type) {
   if (state !== 'play') return;
@@ -403,18 +427,6 @@ function command(clientX, clientY) {
     for (const s of sel) game.directAircraft(s, { point: { x: hit.x, z: hit.z } });
     orderMove(hit.x, hit.z);
   }
-}
-
-// L: selected battleships launch their scout bombers at what they're attacking (or to hunt).
-function launchPlanes() {
-  const carriers = selectedShips().filter((s) => s.type === 'battleship');
-  if (!carriers.length) { hud.toast('Select a battleship to launch its aircraft', '#ff5a4f'); sfx.denied(); return; }
-  let err = null, launched = 0;
-  for (const s of carriers) {
-    const e = game.launchAircraft(s, s.attackTarget && s.attackTarget.kind === 'ship' ? { target: s.attackTarget } : null);
-    if (e) err = e; else launched++;
-  }
-  if (!launched && err) { hud.toast(err, '#ff5a4f'); sfx.denied(); }
 }
 
 // ---------- Manual mode ----------
@@ -794,14 +806,14 @@ window.addEventListener('keydown', (e) => {
     setSelection(playerShips());
     return;
   }
-  const digit = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
+  const digit = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8'].indexOf(e.code);
   if (digit >= 0 && !e.repeat) {
     if (game.deathmatch) selectWeapon(digit);
-    else build(UNIT_ORDER[digit]);
+    else if (digit < UNIT_ORDER.length) build(UNIT_ORDER[digit]);
+    else if (ownedExclusives()[digit - UNIT_ORDER.length]) build(ownedExclusives()[digit - UNIT_ORDER.length]);
     return;
   }
   if (e.code === 'KeyM' && !e.repeat) { toggleMute(); return; }
-  if (e.code === 'KeyL' && !e.repeat && !manual()) { launchPlanes(); return; }
   if (e.code === 'KeyH') lookAt(HOME.x, HOME.z);
   if (e.code === 'KeyC') {
     if (bridge() || (shipCamActive() && shipCam.mode === 'bridge')) Object.assign(look, { yaw: 0, pitch: -0.08 });
@@ -1224,3 +1236,6 @@ precompile().then(() => {
 
 // Exposed for debugging from the browser console.
 window.navalCommand = { get game() { return game; }, goal, renderer, scene, camera, UNITS, get pixelRatio() { return pixelRatio; } };
+
+// Marketing screenshots: with ?thumb in the address, the page exposes its camera and game for scripted shots.
+if (location.search.includes('thumb')) window.__nc = { cam, goal, weather, game: () => game };

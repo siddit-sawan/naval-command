@@ -25,6 +25,7 @@ export function unlock() {
   master.connect(ctx.destination);
   noise = noiseBuffer();
   startSurf();
+  startMusic();
 }
 
 export function setMuted(m) {
@@ -51,6 +52,150 @@ function startSurf() {
   src.connect(lp).connect(gain).connect(master);
   src.start();
   lfo.start();
+}
+
+// Mysterious war ambience, all synthesized: a dark drone on D, slow phrygian pads, distant war drums,
+// far-off gunfire rumbles and the odd sonar ping, all sent through an echoing delay so it feels like open sea and fog.
+const D = 36.71; // D1
+const PHRYGIAN = [1, 16 / 15, 6 / 5, 4 / 3, 3 / 2, 8 / 5, 9 / 5]; // D Eb F G A Bb C
+let music = null;
+
+function startMusic() {
+  const bus = ctx.createGain();
+  bus.gain.value = 0.55;
+  bus.connect(master);
+  // Echo that darkens each repeat.
+  const echo = ctx.createDelay(2);
+  echo.delayTime.value = 0.62;
+  const fb = ctx.createGain();
+  fb.gain.value = 0.5;
+  const damp = ctx.createBiquadFilter();
+  damp.type = 'lowpass';
+  damp.frequency.value = 1400;
+  const wet = ctx.createGain();
+  wet.gain.value = 0.6;
+  echo.connect(damp).connect(fb).connect(echo);
+  damp.connect(wet).connect(bus);
+  music = { bus, send: echo };
+
+  // Drone: two detuned saws and a sub sine, with a slowly breathing filter.
+  const droneFilter = ctx.createBiquadFilter();
+  droneFilter.type = 'lowpass';
+  droneFilter.frequency.value = 260;
+  droneFilter.Q.value = 4;
+  const droneGain = ctx.createGain();
+  droneGain.gain.value = 0.11;
+  droneFilter.connect(droneGain).connect(bus);
+  for (const [f, type, detune] of [[D, 'sawtooth', -6], [D, 'sawtooth', 7], [D / 2, 'sine', 0], [D * 1.5, 'triangle', 3]]) {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.value = f;
+    osc.detune.value = detune;
+    osc.connect(droneFilter);
+    osc.start();
+  }
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 0.045;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.value = 170;
+  lfo.connect(lfoGain).connect(droneFilter.frequency);
+  lfo.start();
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const later = (fn, min, max) => setTimeout(() => { if (ctx) fn(); }, rand(min, max) * 1000);
+
+  // Pads: a slow swell of two or three notes from the scale.
+  const pad = () => {
+    if (ctx.state === 'running') {
+      const root = [1, 1, 4 / 3, 6 / 5][Math.floor(Math.random() * 4)];
+      const notes = [root, root * PHRYGIAN[Math.floor(rand(1, 7))], root * 2 * PHRYGIAN[Math.floor(rand(0, 5))]];
+      const t0 = ctx.currentTime + 0.05;
+      const len = rand(7, 11);
+      for (const m of notes) {
+        const osc = ctx.createOscillator();
+        osc.type = 'triangle';
+        osc.frequency.value = D * 4 * m;
+        osc.detune.value = rand(-8, 8);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, t0);
+        g.gain.linearRampToValueAtTime(0.035, t0 + len * 0.45);
+        g.gain.linearRampToValueAtTime(0, t0 + len);
+        osc.connect(g);
+        g.connect(bus);
+        g.connect(echo);
+        osc.start(t0);
+        osc.stop(t0 + len + 0.1);
+      }
+    }
+    later(pad, 6, 11);
+  };
+
+  // Distant war drum: a soft low thump or a short rolling phrase.
+  const drum = () => {
+    if (ctx.state === 'running') {
+      const hits = Math.random() < 0.5 ? 1 : 3;
+      for (let i = 0; i < hits; i++) {
+        const t0 = ctx.currentTime + i * 0.42;
+        const osc = ctx.createOscillator();
+        osc.frequency.setValueAtTime(95, t0);
+        osc.frequency.exponentialRampToValueAtTime(42, t0 + 0.25);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(i === hits - 1 ? 0.28 : 0.16, t0);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.9);
+        osc.connect(g);
+        g.connect(bus);
+        g.connect(echo);
+        osc.start(t0);
+        osc.stop(t0 + 1);
+      }
+    }
+    later(drum, 9, 20);
+  };
+
+  // Far-off gunfire: a low muffled boom.
+  const rumble = () => {
+    if (ctx.state === 'running') {
+      const src = ctx.createBufferSource();
+      src.buffer = noise;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(260, ctx.currentTime);
+      lp.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 2.5);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.08);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 2.6);
+      src.connect(lp).connect(g);
+      g.connect(bus);
+      g.connect(echo);
+      src.start(ctx.currentTime, Math.random() * 1.5, 2.8);
+    }
+    later(rumble, 7, 18);
+  };
+
+  // Sonar ping with a long echo tail.
+  const ping = () => {
+    if (ctx.state === 'running') {
+      const t0 = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.frequency.value = [880, 1175, 1320][Math.floor(Math.random() * 3)];
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.05, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0005, t0 + 1.4);
+      osc.connect(g);
+      g.connect(bus);
+      g.connect(echo);
+      osc.start(t0);
+      osc.stop(t0 + 1.5);
+    }
+    later(ping, 14, 32);
+  };
+
+  later(pad, 0.5, 1.5);
+  later(drum, 6, 10);
+  later(rumble, 4, 9);
+  later(ping, 10, 20);
 }
 
 // volume falls off with distance from the camera focus; rate-limited so big fights don't clip.
@@ -137,3 +282,15 @@ export const sfx = {
   victory() { tone([523, 659, 784, 1047], { duration: 0.5, volume: 0.15, gap: 0.16 }); },
   defeat() { tone([392, 330, 262, 196], { duration: 0.6, volume: 0.15, type: 'triangle', gap: 0.22 }); },
 };
+
+// Start the sound as soon as the page loads. Browsers keep the audio context suspended until the player
+// interacts, so also retry on the first click, key press or touch, and stop listening once it is running.
+const GESTURES = ['pointerdown', 'keydown', 'touchstart'];
+function autoStart() {
+  unlock();
+  if (ctx && ctx.state === 'running') {
+    for (const e of GESTURES) window.removeEventListener(e, autoStart, true);
+  }
+}
+for (const e of GESTURES) window.addEventListener(e, autoStart, true);
+autoStart();

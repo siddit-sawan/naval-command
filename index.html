@@ -62,6 +62,10 @@
     .row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 18px; }
     .diff { min-width: 120px; padding: 10px 18px; font-size: 15px; }
     .diff.active { outline: 2px solid var(--accent); }
+    .diff.ranked { background: linear-gradient(180deg, #8a2a2a, #561616); border-color: #ff7a6a; }
+    .rankedinfo { max-width: 560px; margin: -4px auto 10px; padding: 8px 14px; font-size: 13px; line-height: 1.45; color: var(--muted); background: rgba(255,90,79,0.1); border: 1px solid rgba(255,122,106,0.4); border-radius: 10px; }
+    .rankedinfo.hidden { display: none; }
+    .rankedinfo b { color: var(--text); }
     .help {
       margin-top: 26px; color: var(--muted); font-size: 14px; line-height: 1.7;
       max-width: 560px; background: rgba(0,0,0,0.25); padding: 14px 20px; border-radius: 10px;
@@ -203,6 +207,8 @@
     #xpText { font-size: 11px; color: var(--muted); margin-top: 3px; }
     #profileBar .coins { background: rgba(0,0,0,0.35); padding: 8px 16px; border-radius: 10px; font-weight: 800; font-size: 20px; color: var(--accent); }
     .btn.small { min-width: 0; font-size: 14px; padding: 9px 16px; position: relative; }
+    #shipGrid .btn.small { font-size: 12.5px; padding: 6px 10px; }
+    #shipGrid .btn.view { flex: 0 0 auto; width: 34px; height: 30px; padding: 0; font-size: 15px; line-height: 1; }
     .btn.small:disabled { opacity: 0.5; cursor: default; filter: none; transform: none; }
     .btn.ad { background: linear-gradient(180deg, #7b2cff, #4a1599); border-color: #b48cff; }
     .btn.buy { background: linear-gradient(180deg, #2f8a57, #1d5c39); border-color: #4cd68a; }
@@ -244,6 +250,44 @@
     .livery-name { font-weight: 800; font-size: 15px; border-left: 4px solid var(--acc); padding-left: 8px; }
     .livery-desc { color: var(--muted); font-size: 12.5px; line-height: 1.4; min-height: 34px; }
     .livery-card .btn { width: 100%; margin: 0; }
+    #showroomCanvas {
+      width: 100%; height: min(34vh, 280px); display: block; border-radius: 10px; cursor: grab; touch-action: none;
+      background: linear-gradient(180deg, #5d86a8, #b7cfdf 62%, #14465c 62.2%);
+    }
+    #showroomCanvas:active { cursor: grabbing; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 8px; }
+    .chip {
+      background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border); color: var(--text); border-radius: 999px;
+      padding: 6px 14px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+    }
+    .chip:hover { filter: brightness(1.25); }
+    .chip.active { background: rgba(240,180,41,0.18); border-color: var(--accent); color: var(--accent); }
+    .tabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--panel-border); }
+    .tab {
+      background: none; border: none; border-bottom: 3px solid transparent; color: var(--muted); cursor: pointer;
+      font: inherit; font-weight: 800; font-size: 15px; letter-spacing: 1px; padding: 8px 16px; margin-bottom: -1px;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    #shipGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+    #shipGrid.hidden { display: none; }
+    .ship-stats { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 4px 10px; font-size: 12.5px; color: var(--muted); }
+    .ship-stats b { color: var(--text); }
+    .unit-btn.exclusive { border-color: var(--accent); }
+    #upgradeGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+    #upgradeGrid.hidden { display: none; }
+    .upgrade-card {
+      background: rgba(255,255,255,0.04); border: 1px solid var(--panel-border); border-radius: 12px; padding: 12px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .upgrade-card.maxed { border-color: var(--green); }
+    .upgrade-head { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 16px; }
+    .upgrade-head .ico { font-size: 24px; width: 36px; height: 36px; display: grid; place-items: center; background: rgba(240,180,41,0.12); border-radius: 8px; }
+    .upgrade-per { color: var(--green); font-size: 12.5px; font-weight: 700; }
+    .pips { display: flex; gap: 4px; }
+    .pip { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.1); }
+    .pip.on { background: var(--accent); }
+    .upgrade-card .btn { width: 100%; margin: 0; }
     #dailyDays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 12px 0 16px; }
     .day { background: rgba(255,255,255,0.05); border: 1px solid var(--panel-border); border-radius: 8px; padding: 8px 2px; font-size: 12px; color: var(--muted); }
     .day b { display: block; color: var(--accent); margin-top: 4px; font-size: 13px; }
@@ -372,7 +416,9 @@
       <button class="btn diff" data-diff="easy">Easy</button>
       <button class="btn diff active" data-diff="normal">Normal</button>
       <button class="btn diff" data-diff="hard">Hard</button>
+      <button class="btn diff ranked" data-diff="ranked" title="Fleet battle that gets harder with your rank, but pays more">⚔ Ranked War</button>
     </div>
+    <div class="rankedinfo hidden" id="rankedInfo"></div>
     <div class="row" id="modeRow">
       <button class="btn diff active" data-mode="fleet" title="Command your whole fleet">Fleet</button>
       <button class="btn diff" data-mode="manual" title="Team deathmatch: 5 ships a side, you steer and aim one">Manual</button>
@@ -386,7 +432,7 @@
     </div>
     <button class="btn primary" id="playBtn">Play</button>
     <div class="row extras">
-      <button class="btn small" id="storeBtn">🎨 Livery Store</button>
+      <button class="btn small" id="storeBtn">🛒 Shop</button>
       <button class="btn small" id="dailyBtn">🎁 Daily Reward<span class="dot hidden" id="dailyDot"></span></button>
       <button class="btn small ad" id="freeCoinsBtn">📺 Free Coins</button>
       <button class="btn small" id="recordBtn">🎖 Service Record</button>
@@ -403,13 +449,36 @@
     <div class="sheet">
       <button class="close" aria-label="Close">✕</button>
       <div class="sheet-head">
-        <div><h2>Livery Store</h2><div class="sub" style="margin:0">Paint your whole fleet. Liveries show on every ship you build.</div></div>
+        <div><h2>Shop</h2><div class="sub" id="storeSub" style="margin:0">Paint your whole fleet. Liveries show on every ship you build.</div></div>
         <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn small" id="showroomBtn">👁 Showroom</button>
           <button class="btn small ad" id="storeFreeBtn">📺 Free Coins</button>
           <div class="coins"><span class="coin"></span> <span id="storeCoins">0</span></div>
         </div>
       </div>
+      <div class="tabs" id="storeTabs">
+        <button class="tab active" data-tab="liveries">Liveries</button>
+        <button class="tab" data-tab="upgrades">Upgrades</button>
+        <button class="tab" data-tab="ships">Exclusive Ships</button>
+      </div>
       <div id="storeGrid"></div>
+      <div id="upgradeGrid" class="hidden"></div>
+      <div id="shipGrid" class="hidden"></div>
+    </div>
+  </div>
+
+  <!-- Showroom -->
+  <div id="showroomModal" class="modal hidden">
+    <div class="sheet narrow">
+      <button class="close" aria-label="Close">✕</button>
+      <div class="sheet-head">
+        <div><h2>Showroom</h2><div class="sub" id="showroomLabel" style="margin:0"></div></div>
+        <button class="btn small" id="showroomBack">← Back to Shop</button>
+      </div>
+      <canvas id="showroomCanvas"></canvas>
+      <div class="sub" style="margin:8px 0 10px;text-align:center">Drag to rotate · wheel to zoom · double-click to auto-rotate · 🔒 = not owned yet</div>
+      <div class="chips" id="showroomShips"></div>
+      <div class="chips" id="showroomLiveries"></div>
     </div>
   </div>
 
@@ -448,7 +517,7 @@
       <b>WASD / Arrows / middle-drag / screen edges</b> pan (<b>Shift</b> faster) &nbsp;·&nbsp; <b>Wheel</b> zoom to cursor<br />
       <b>Ship cameras:</b> select a ship, then <b>V</b> or the camera bar: Chase, Orbit, Waterline, Bridge &nbsp;·&nbsp; <b>Double-click</b> a ship to ride along &nbsp;·&nbsp; <b>Esc</b> overview<br />
       <b>Q / E</b> rotate &nbsp;·&nbsp; <b>R / F</b> tilt &nbsp;·&nbsp; <b>Right-drag</b> or <b>Alt + drag</b> orbit &nbsp;·&nbsp; <b>C</b> face north<br />
-      <b>1–4</b> build ships &nbsp;·&nbsp; <b>L</b> battleship launches its scout bomber &nbsp;·&nbsp; <b>Ctrl+A</b> select all &nbsp;·&nbsp; <b>Space</b> find selection &nbsp;·&nbsp; <b>H</b> home<br />
+      <b>1–4</b> build ships &nbsp;·&nbsp; battleships launch scout bombers on their own &nbsp;·&nbsp; <b>Ctrl+A</b> select all &nbsp;·&nbsp; <b>Space</b> find selection &nbsp;·&nbsp; <b>H</b> home<br />
       <b>M</b> mute &nbsp;·&nbsp; <b>Esc</b> pause &nbsp;·&nbsp; Submarines stay hidden unless enemies are close<br />
       <b>Manual mode</b> is a team deathmatch: 5 ships a side, sink them all. You steer and aim from the bridge.<br />
       Weapons are <b>offline until you hold outposts</b>: one arms your main weapon, two arm everything.<br />

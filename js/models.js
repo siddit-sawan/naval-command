@@ -11,6 +11,7 @@ const concrete = mat(0x9a9a92);
 const subHull = mat(0x2b3138);
 const white = mat(0xe8eaec);
 const glass = mat(0x1d2b38);
+const gold = mat(0xd9a636); // brass trim that marks the exclusive ships
 const redOxide = mat(0x7a2a22); // anti-fouling paint below the waterline
 const orange = mat(0xe07a1f);
 const portLight = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.25, 0.2) });
@@ -317,6 +318,69 @@ const BUILDERS = {
   },
 };
 
+// Extra fittings that make each exclusive ship look different from the standard hull it is built on.
+// They run after the base model is assembled and before it is baked; deckY is that hull's deck height.
+const EXTRAS = {
+  // Corvette -> Raider: raked stern wing, brass deck stripe and missile pods on the quarters.
+  raider(ship, m, parts) {
+    const add = builder(ship);
+    const deckY = 1.1;
+    add(cached('xrStripe', () => new THREE.BoxGeometry(9, 0.06, 0.3)), gold, 0.5, deckY + 0.04);
+    add(cached('xrBand', () => new THREE.ExtrudeGeometry(hullShape(7.06, 1.86), { depth: 0.1, bevelEnabled: false }).rotateX(-Math.PI / 2)), gold, 0, deckY - 0.14);
+    const wing = add(cached('xrWing', () => new THREE.BoxGeometry(1.8, 0.1, 5.2)), dark, -6.2, deckY + 1.9);
+    wing.rotation.z = 0.12;
+    for (const z of [-1.2, 1.2]) add(cached('xrPost', () => new THREE.BoxGeometry(0.14, 1.9, 0.14)), dark, -6.2, deckY + 0.95, z);
+    for (const z of [-2.6, 2.6]) add(cached('xrFin', () => new THREE.BoxGeometry(1.8, 0.4, 0.08)), gold, -6.2, deckY + 1.95, z);
+    for (const z of [-1.5, 1.5]) {
+      add(cached('xrPod', () => new THREE.BoxGeometry(1.6, 0.5, 0.5)), dark, -2.4, deckY + 0.3, z);
+      add(cached('xrPodTip', () => new THREE.BoxGeometry(0.2, 0.52, 0.52)), gold, -1.6, deckY + 0.3, z);
+    }
+    secondaryGun(ship, 5.6, deckY + 0.1, 0, 0);
+  },
+
+  // Destroyer -> Cruiser: extra forward turret, side AA mounts, a big radome and brass trim.
+  cruiser(ship, m, parts) {
+    const add = builder(ship);
+    const deckY = 1.4;
+    add(cached('xcBand', () => new THREE.ExtrudeGeometry(hullShape(12.56, 2.56), { depth: 0.12, bevelEnabled: false }).rotateX(-Math.PI / 2)), gold, 0, deckY - 0.16);
+    secondaryGun(ship, 10.2, deckY + 0.3, 0, 0);
+    for (let i = 0; i < 3; i++) {
+      for (const z of [-1.9, 1.9]) {
+        add(cached('xcAA', () => new THREE.BoxGeometry(0.6, 0.4, 0.6)), grey, -1.4 + i * 1.5, deckY + 0.2, z);
+        add(cached('xcAAGun', () => new THREE.BoxGeometry(1.2, 0.08, 0.3).translate(0.6, 0, 0)), dark, -1.4 + i * 1.5, deckY + 0.45, z);
+      }
+    }
+    add(cached('xcRadome', () => new THREE.SphereGeometry(0.95, 14, 10)), white, 2.3, deckY + 4.7);
+    add(cached('xcRadomeBase', () => new THREE.CylinderGeometry(0.5, 0.7, 0.8, 8)), grey, 2.3, deckY + 4.0);
+    add(cached('xcFunnelRing', () => new THREE.CylinderGeometry(1.14, 1.14, 0.18, 8)), gold, -3.6, deckY + 3.0);
+  },
+
+  // Submarine -> Phantom: long dorsal ridge, bow planes, glowing accent strip and a missile deck.
+  phantom(ship, m, parts) {
+    const add = builder(ship);
+    add(cached('xpRidge', () => new THREE.BoxGeometry(8, 0.45, 0.14)), dark, -3.5, 0.95);
+    add(cached('xpPlanes', () => new THREE.BoxGeometry(1.0, 0.1, 3.8)), subHull, 6.2, -0.55);
+    for (const z of [-1.9, 1.9]) add(cached('xpPlaneTip', () => new THREE.BoxGeometry(1.0, 0.14, 0.12)), gold, 6.2, -0.55, z);
+    add(cached('xpStrip', () => new THREE.BoxGeometry(9, 0.05, 0.12)), m.accent, 0.3, 0.9);
+    add(cached('xpSailFin', () => new THREE.BoxGeometry(1.4, 1.2, 0.12)), gold, 3.4, 2.1);
+    vls(ship, -4.2, 0.84, 3, 2);
+  },
+
+  // Battleship -> Dreadnought: a fourth main turret, bow and stern CIWS, brass trim and a taller tower.
+  dreadnought(ship, m, parts) {
+    const add = builder(ship);
+    const deckY = 1.8;
+    add(cached('xdBand', () => new THREE.ExtrudeGeometry(hullShape(18.06, 3.81), { depth: 0.16, bevelEnabled: false }).rotateX(-Math.PI / 2)), gold, 0, deckY - 0.2);
+    ciws(ship, 15.2, deckY + 0.3);
+    ciws(ship, -17, deckY + 0.3);
+    parts.guns.push(turret(ship, -9.4, deckY + 1.8, 1.5, 2, Math.PI));
+    add(cached('xdTop', () => new THREE.BoxGeometry(2.6, 0.9, 2.8)), grey, 0.6, deckY + 9.2);
+    add(cached('xdTopCap', () => new THREE.BoxGeometry(2.9, 0.15, 3.1)), gold, 0.6, deckY + 9.72);
+    for (const z of [-1.4, 1.4]) add(cached('xdDome', () => new THREE.SphereGeometry(0.6, 12, 8)), white, 0.6, deckY + 10.1, z);
+    for (const x of [-4.5, -7.5]) add(cached('xdFunnelRing', () => new THREE.CylinderGeometry(1.34, 1.34, 0.2, 8)), gold, x, deckY + 3.9 + (x < -6 ? -0.4 : 0));
+  },
+};
+
 // Bridge eye point for the first-person view, in ship-local coordinates (+x is the bow).
 const EYES = {
   corvette: [0.7, 4.6],
@@ -327,12 +391,13 @@ const EYES = {
 };
 
 // liveryId: a key of LIVERIES (see livery.js). pennant: hull number painted on both sides, e.g. "D 14".
-export function makeShipModel(type, liveryId, pennant = '') {
+export function makeShipModel(type, liveryId, pennant = '', variant = '') {
   const ship = new THREE.Group();
   ship.userData.type = type;
   const parts = BUILDERS[type](ship, team(liveryId));
+  if (variant) EXTRAS[variant](ship, team(liveryId), parts);
   const spot = ship.userData.pennantSpot;
-  bake(ship, `${type}-${liveryId}`, SHIP_FINISH);
+  bake(ship, `${variant || type}-${liveryId}`, SHIP_FINISH);
 
   const decal = pennantDecal(pennant, liveryId);
   const geo = cached(`pennant${type}`, () => new THREE.PlaneGeometry(spot.h * 2, spot.h));

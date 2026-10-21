@@ -11,6 +11,7 @@ export class Hud {
       queue: $('queue'), toast: $('toast'), selTitle: $('selTitle'), selBody: $('selBody'), mute: $('muteBtn'),
     };
     this.buttons = {};
+    this.onBuild = onBuild;
     for (const btn of document.querySelectorAll('#build .unit-btn')) {
       const type = btn.dataset.unit;
       this.buttons[type] = { btn, prog: btn.querySelector('.prog') };
@@ -42,6 +43,25 @@ export class Hud {
     this.toastTimer = 0;
   }
 
+  // Build buttons for the exclusive ships the player owns, keyed 5, 6, ... after the standard four.
+  setExclusives(types) {
+    for (const type of Object.keys(this.buttons)) {
+      if (!UNITS[type].exclusive) continue;
+      this.buttons[type].btn.remove();
+      delete this.buttons[type];
+    }
+    types.forEach((type, i) => {
+      const u = UNITS[type];
+      const btn = document.createElement('button');
+      btn.className = 'unit-btn exclusive';
+      btn.dataset.unit = type;
+      btn.innerHTML = `<span class="key">${UNIT_ORDER.length + 1 + i}</span><span class="name">${u.label}</span><span class="cost">⛃ ${u.cost}</span><span class="desc">Exclusive</span><div class="prog"></div>`;
+      btn.addEventListener('click', () => this.onBuild(type));
+      $('build').appendChild(btn);
+      this.buttons[type] = { btn, prog: btn.querySelector('.prog') };
+    });
+  }
+
   setMuted(m) {
     this.el.mute.textContent = m ? '🔇' : '🔊';
   }
@@ -66,17 +86,16 @@ export class Hud {
 
     const full = team.queue.length >= ECONOMY.maxQueue;
     const current = team.queue[0];
-    for (const type of UNIT_ORDER) {
-      const { btn, prog } = this.buttons[type];
+    for (const [type, { btn, prog }] of Object.entries(this.buttons)) {
       btn.disabled = full || team.gold < UNITS[type].cost;
       const queued = team.queue.filter((q) => q === type).length;
       btn.title = queued ? `${queued} queued` : '';
       prog.style.width = type === current ? `${(team.buildT / game.buildTime('player', type)) * 100}%` : '0';
     }
     if (team.queue.length) {
-      const capped = game.alive('player').length >= ECONOMY.maxShips;
+      const capped = game.alive('player').length >= game.maxShips('player');
       this.el.queue.textContent = capped
-        ? `Fleet at maximum size (${ECONOMY.maxShips})`
+        ? `Fleet at maximum size (${game.maxShips('player')})`
         : `Building ${UNITS[current].label}${team.queue.length > 1 ? ` · ${team.queue.length - 1} more queued` : ''}`;
       this.el.queue.classList.remove('hidden');
     } else {

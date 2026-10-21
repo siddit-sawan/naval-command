@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS, HELM_ARMOR, DEATHMATCH, LOADOUTS, AIRCRAFT } from './config.js';
+import { rankedDifficulty, UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DIFFICULTY, TEAM_COLORS, HELM_ARMOR, DEATHMATCH, LOADOUTS, AIRCRAFT } from './config.js';
 import { makeShipModel, makeHarbor, makeOutpost, makeAircraftModel } from './models.js';
 import { ISLANDS, sampleOcean } from './ocean.js';
 import { Effects } from './effects.js';
@@ -86,7 +86,7 @@ export class Game {
    * and aims its weapons by hand; each side has five ships and the last fleet afloat wins.
    * weather (optional) hides ships in fog; see fog.js. livery: the player fleet's paint scheme (livery.js).
    */
-  constructor(scene, effects, { difficulty = 'normal', demo = false, manual = false, flagship = 'destroyer', weather = null, livery = 'dazzle', hooks = {} } = {}) {
+  constructor(scene, effects, { difficulty = 'normal', demo = false, manual = false, flagship = 'destroyer', weather = null, livery = 'dazzle', upgrades = null, rankLevel = 0, hooks = {} } = {}) {
     this.scene = scene;
     this.effects = effects;
     this.demo = demo;
@@ -101,10 +101,13 @@ export class Game {
     this.fpShip = null; // set by the camera: the ship it rides with hides its own overlays
     this.weather = weather;
     this.livery = livery;
+    // Shop upgrades boost the player in real matches only (the menu backdrop fights stay even).
+    this.up = demo || !upgrades ? { income: 1, gold: 0, ships: [], build: 1, hp: 1, cap: 0, exclusive: [] } : upgrades;
     this.difficulty = difficulty;
     if (weather) weather.reset();
     this.escortT = 0;
-    this.diff = DIFFICULTY[difficulty];
+    this.rankLevel = rankLevel;
+    this.diff = difficulty === 'ranked' ? rankedDifficulty(rankLevel) : DIFFICULTY[difficulty];
     this.hooks = { toast() {}, onGameOver() {}, ...hooks };
     this.root = new THREE.Group();
     scene.add(this.root);
@@ -123,7 +126,7 @@ export class Game {
     this.teams = {};
     this.harbors = {};
     for (const team of ['player', 'enemy']) {
-      const gold = team === 'player' && !demo ? this.diff.playerGold : ECONOMY.startGold;
+      const gold = team === 'player' && !demo ? this.diff.playerGold + this.up.gold : ECONOMY.startGold;
       this.teams[team] = { gold, queue: [], buildT: 0, built: 0, lost: 0, kills: 0 };
       const def = MAP.harbors[team];
       const { group, gun } = makeHarbor(def.x, def.z, team, team === 'player' ? 101 : 202);
@@ -156,6 +159,7 @@ export class Game {
     for (const team of ['player', 'enemy']) {
       for (const type of ['destroyer', 'corvette']) this.spawn(team, type, true);
     }
+    for (const type of this.up.ships) this.spawn('player', type, true);
   }
 
   // Two identical fleets in line abreast, facing each other across the middle of the map.
@@ -190,13 +194,18 @@ export class Game {
 
   incomeOf(team) {
     const owned = this.outposts.filter((o) => o.owner === team).length;
-    const mult = this.demo ? 1 : team === 'enemy' ? this.diff.income : this.diff.playerIncome;
+    const mult = this.demo ? 1 : team === 'enemy' ? this.diff.income : this.diff.playerIncome * this.up.income;
     return (ECONOMY.baseIncome + owned * ECONOMY.outpostIncome) * mult;
+  }
+
+  // Fleet size limit for a team.
+  maxShips(team) {
+    return ECONOMY.maxShips + (team === 'player' ? this.up.cap : 0);
   }
 
   // Seconds to build one ship of this type.
   buildTime(team, type) {
-    const mult = this.demo ? 1 : team === 'enemy' ? this.diff.build : this.diff.playerBuild;
+    const mult = this.demo ? 1 : team === 'enemy' ? this.diff.build : this.diff.playerBuild * this.up.build;
     return UNITS[type].build * mult;
   }
 
@@ -253,6 +262,7 @@ export class Game {
   queueBuild(team, type) {
     const t = this.teams[team];
     const stats = UNITS[type];
+    if (stats.exclusive && (team !== 'player' || !this.up.exclusive.includes(type))) return 'Ship not unlocked';
     if (t.queue.length >= ECONOMY.maxQueue) return 'Build queue is full';
     if (t.gold < stats.cost) return 'Not enough gold';
     t.gold -= stats.cost;
@@ -373,10 +383,19 @@ export class Game {
     };
     this.aircraft.push(p);
     ship.plane = p;
-    ship.planeCd = AIRCRAFT.cooldown;
+    ship.planeCd = this.airCooldown(ship);
     sfx.torpedo(this.volumeAt(ship.x, ship.z));
     if (ship.team === 'player' && !this.demo) this.hooks.toast('Scout bomber launched', TEAM_COLORS.player.css);
     return null;
+  }
+
+  // The player's fleet battleships launch their bomber by themselves, 20-30 seconds after the last one is back.
+  autoLaunches(u) {
+    return u.team === 'player' && !this.demo && !this.deathmatch;
+  }
+
+  airCooldown(ship) {
+    return this.autoLaunches(ship) ? 20 + Math.random() * 10 : AIRCRAFT.cooldown;
   }
 
   directAircraft(ship, order) {
@@ -388,7 +407,7 @@ export class Game {
     if (ship.type !== 'battleship') return null;
     if (ship.plane) return ship.plane.bombs ? 'Aircraft airborne' : 'Aircraft returning';
     if (ship.planeCd > 0) return `Aircraft ready in ${Math.ceil(ship.planeCd)}s`;
-    return 'Aircraft ready (L)';
+    return this.autoLaunches(ship) ? 'Aircraft launching' : 'Aircraft ready (L)';
   }
 
   // Launch cooldowns, and AI battleships launching when there's something to hunt. The player's own
@@ -398,6 +417,7 @@ export class Game {
       if (!u.alive || u.type !== 'battleship') continue;
       if (!u.plane) u.planeCd = Math.max(0, u.planeCd - dt);
       const auto = u !== this.helm && (u.team === 'enemy' || this.demo || this.deathmatch);
+      if (this.autoLaunches(u) && !u.plane && u.planeCd <= 0 && !this.over && !this.aiHold) { this.launchAircraft(u, null); continue; }
       if (!auto || u.plane || u.planeCd > 0 || this.over || this.aiHold || !this.weaponsOnline(u.team, 2)) continue;
       const foe = other(u.team);
       const prey = this.units.some((e) => e.alive && e.team === foe && this.visibleTo(e, u.team)
@@ -537,7 +557,7 @@ export class Game {
     this.root.remove(p.mesh);
     if (p.owner.plane === p) p.owner.plane = null;
     // A plane lost in action takes longer to replace than one that lands.
-    if (destroyed) p.owner.planeCd = Math.max(p.owner.planeCd, AIRCRAFT.cooldown);
+    if (destroyed) p.owner.planeCd = Math.max(p.owner.planeCd, this.airCooldown(p.owner));
   }
 
   // ---------- Spawning ----------
@@ -556,7 +576,9 @@ export class Game {
     const id = this.nextId++;
     const name = team === 'player' ? SHIP_NAMES[this.nameIndex++ % SHIP_NAMES.length] : null;
     // Pennant number painted on the hull, e.g. D 14.
-    const mesh = makeShipModel(type, team === 'player' ? this.livery : 'enemy', `${HULL_LETTER[type]} ${10 + ((id * 37) % 90)}`);
+    const hull = stats.base || type; // exclusive ships ride a standard hull, enlarged
+    const mesh = makeShipModel(hull, team === 'player' ? this.livery : 'enemy', `${HULL_LETTER[hull]} ${10 + ((id * 37) % 90)}`, stats.base ? type : '');
+    if (stats.scale) mesh.scale.setScalar(stats.scale);
     this.root.add(mesh);
     const ring = new THREE.Mesh(ringGeo(stats.size), overlayMat(0x4cd68a, 0.85));
     const marker = new THREE.Mesh(markerGeo, overlayMat(0x4cd68a, 0.9));
@@ -572,16 +594,17 @@ export class Game {
       this.root.add(o);
     }
 
+    const hp = Math.round(stats.hp * (team === 'player' ? this.up.hp : 1));
     const x = at ? at.x : h.spawn.x + (Math.random() - 0.5) * (initial ? 60 : 24);
     const z = at ? at.z : h.z + toSea * (initial ? 80 + Math.random() * 20 : 62);
     const u = {
-      kind: 'ship', id, type, stats, team, name, weapons, weaponIdx: 0, wcool: weapons ? weapons.map(() => 0) : null,
+      kind: 'ship', id, type: hull, stats, team, name, weapons, weaponIdx: 0, wcool: weapons ? weapons.map(() => 0) : null,
       x, z, heading: at ? at.heading : toSea > 0 ? Math.PI / 2 : -Math.PI / 2, speed: initial ? 0 : stats.speed * 0.4,
-      hp: stats.hp, maxHp: stats.hp, alive: true, mode: 'idle', target: null, attackTarget: null, engage: null,
+      hp, maxHp: hp, alive: true, mode: 'idle', target: null, attackTarget: null, engage: null,
       cooldown: Math.random() * stats.reload, scanT: Math.random() * 0.3, spotted: false, revealedUntil: 0,
       mesh, ring, marker, path, bar, selected: false, hovered: false, sinkT: 0, lastHit: -99,
       wakeAcc: 0, sprayAcc: 0, smokeAcc: 0,
-      plane: null, planeCd: type === 'battleship' ? 15 + Math.random() * 20 : Infinity,
+      plane: null, planeCd: type === 'battleship' ? (team === 'player' && !this.demo && !this.deathmatch ? 20 + Math.random() * 10 : 15 + Math.random() * 20) : Infinity,
     };
     this.units.push(u);
     if (!initial) {
@@ -654,7 +677,7 @@ export class Game {
     const t = this.teams[team];
     t.gold += this.incomeOf(team) * dt;
     if (!t.queue.length) { t.buildT = 0; return; }
-    if (this.alive(team).length >= ECONOMY.maxShips) return;
+    if (this.alive(team).length >= this.maxShips(team)) return;
     t.buildT += dt;
     const type = t.queue[0];
     if (t.buildT >= this.buildTime(team, type)) {

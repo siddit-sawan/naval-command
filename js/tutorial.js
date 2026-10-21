@@ -57,7 +57,7 @@ function steps(mode, ctx) {
       },
       {
         title: 'Into battle',
-        text: '<b>Right-click</b> an enemy ship or the red harbor to attack. Shells fly flat, so ships need a clear line of fire. <b>Fog banks</b> hide ships until they are close. Battleships can launch a <b>scout bomber</b> with <b>L</b>. Good luck!',
+        text: '<b>Right-click</b> an enemy ship or the red harbor to attack. Shells fly flat, so ships need a clear line of fire. <b>Fog banks</b> hide ships until they are close. Battleships launch a <b>scout bomber</b> on their own every 20-30 seconds. Good luck!',
         finish: true,
       },
     ];

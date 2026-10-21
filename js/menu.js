@@ -1,9 +1,11 @@
 import { profile, RANKS } from './profile.js';
 import { LIVERIES, STORE_ORDER, drawPreview } from './livery.js';
 import { showAd } from './platform.js';
+import { UPGRADES, UPGRADE_ORDER, UNITS, EXCLUSIVE_ORDER } from './config.js';
 import { sfx } from './audio.js';
+import { createShowroom } from './showroom.js';
 
-// Everything around the battles: the profile bar, Livery Store, daily reward, free-coin ads,
+// Everything around the battles: the profile bar, Shop, daily reward, free-coin ads,
 // Service Record, how-to-play, and the coin rewards on the end screen.
 
 const $ = (id) => document.getElementById(id);
@@ -118,7 +120,119 @@ export function createMenus({ adHooks, onLiveryChange }) {
       grid.appendChild(card);
     }
   }
-  $('storeBtn').addEventListener('click', () => { renderStore(); openModal('storeModal'); });
+  // ---------- Showroom ----------
+  let showroom = null;
+  $('showroomBtn').addEventListener('click', () => {
+    openModal('showroomModal');
+    showroom ||= createShowroom({
+      canvas: $('showroomCanvas'), shipBar: $('showroomShips'), liveryBar: $('showroomLiveries'), label: $('showroomLabel'),
+      equippedId: () => profile.data.livery, owns: (id) => profile.owns(id), ownsShip: (id) => profile.ownsShip(id),
+    });
+    showroom.open();
+  });
+  $('showroomBack').addEventListener('click', () => { showTab(storeTab); openModal('storeModal'); });
+
+  // ---------- Upgrades tab ----------
+  let storeTab = 'liveries';
+  function renderUpgrades() {
+    const grid = $('upgradeGrid');
+    grid.innerHTML = '';
+    for (const id of UPGRADE_ORDER) {
+      const up = UPGRADES[id];
+      const level = profile.upgradeLevel(id);
+      const max = up.costs.length;
+      const cost = profile.upgradeCost(id);
+      const card = document.createElement('div');
+      card.className = `upgrade-card${cost === null ? ' maxed' : ''}`;
+      const pips = up.costs.map((_, i) => `<div class="pip${i < level ? ' on' : ''}"></div>`).join('');
+      card.innerHTML = `<div class="upgrade-head"><span class="ico">${up.icon}</span><div>${up.name}<div class="livery-desc" style="min-height:0;font-weight:400">Level ${level} / ${max}</div></div></div>
+        <div class="livery-desc">${up.desc}</div><div class="upgrade-per">Each level: ${up.per}</div><div class="pips">${pips}</div>`;
+      const btn = document.createElement('button');
+      btn.className = 'btn small';
+      if (cost === null) {
+        btn.textContent = 'Maxed out';
+        btn.disabled = true;
+      } else {
+        btn.innerHTML = `Upgrade ${coin} ${fmt(cost)}`;
+        btn.classList.add('buy');
+        btn.disabled = profile.data.coins < cost;
+        btn.onclick = () => {
+          if (!profile.buyUpgrade(id)) { sfx.denied(); return; }
+          sfx.built();
+          notify(`${up.name} upgraded to level ${level + 1}!`);
+          renderUpgrades();
+        };
+      }
+      card.appendChild(btn);
+      grid.appendChild(card);
+    }
+  }
+  // ---------- Exclusive ships tab ----------
+  function openShowroom(shipId) {
+    openModal('showroomModal');
+    showroom ||= createShowroom({
+      canvas: $('showroomCanvas'), shipBar: $('showroomShips'), liveryBar: $('showroomLiveries'), label: $('showroomLabel'),
+      equippedId: () => profile.data.livery, owns: (id) => profile.owns(id), ownsShip: (id) => profile.ownsShip(id),
+    });
+    showroom.open(shipId);
+  }
+  function renderShips() {
+    const grid = $('shipGrid');
+    grid.innerHTML = '';
+    for (const id of EXCLUSIVE_ORDER) {
+      const u = UNITS[id];
+      const base = UNITS[u.base];
+      const owned = profile.ownsShip(id);
+      const card = document.createElement('div');
+      card.className = `upgrade-card${owned ? ' maxed' : ''}`;
+      card.innerHTML = `<div class="upgrade-head"><div>${u.label}<div class="livery-desc" style="min-height:0;font-weight:400">Based on the ${base.label}</div></div></div>
+        <div class="livery-desc">${u.blurb}</div>
+        <div class="ship-stats"><span>Hull</span><b>${u.hp}</b><span>Speed</span><b>${u.speed}</b><span>Range</span><b>${u.range}</b><span>Damage</span><b>${u.damage}</b></div>
+        <div class="upgrade-per" style="color:var(--accent)">In battle: ${coin} ${u.cost} gold per ship (${base.label}: ${base.cost})</div>`;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px';
+      const view = document.createElement('button');
+      view.className = 'btn small view';
+      view.textContent = '👁';
+      view.title = 'View in showroom';
+      view.onclick = () => openShowroom(id);
+      row.appendChild(view);
+      const btn = document.createElement('button');
+      btn.className = 'btn small';
+      btn.style.flex = '1';
+      if (owned) {
+        btn.textContent = 'Owned · build in battle';
+        btn.disabled = true;
+      } else {
+        btn.innerHTML = `Buy ${coin} ${fmt(u.shopPrice)}`;
+        btn.classList.add('buy');
+        btn.disabled = profile.data.coins < u.shopPrice;
+        btn.onclick = () => {
+          if (!profile.buyShip(id)) { sfx.denied(); return; }
+          sfx.captured();
+          notify(`${u.label} unlocked! Build it in fleet battles.`);
+          renderShips();
+        };
+      }
+      row.appendChild(btn);
+      card.appendChild(row);
+      grid.appendChild(card);
+    }
+  }
+  function showTab(tab) {
+    storeTab = tab;
+    for (const b of document.querySelectorAll('#storeTabs .tab')) b.classList.toggle('active', b.dataset.tab === tab);
+    $('storeGrid').classList.toggle('hidden', tab !== 'liveries');
+    $('upgradeGrid').classList.toggle('hidden', tab !== 'upgrades');
+    $('shipGrid').classList.toggle('hidden', tab !== 'ships');
+    $('storeSub').textContent = tab === 'liveries'
+      ? 'Paint your whole fleet. Liveries show on every ship you build.'
+      : tab === 'upgrades' ? 'Permanent upgrades that carry into every battle you fight.'
+        : 'Buy an exclusive ship once, then build it in fleet battles for extra gold.';
+    if (tab === 'liveries') renderStore(); else if (tab === 'upgrades') renderUpgrades(); else renderShips();
+  }
+  for (const b of document.querySelectorAll('#storeTabs .tab')) b.addEventListener('click', () => { sfx.click(); showTab(b.dataset.tab); });
+  $('storeBtn').addEventListener('click', () => { showTab(storeTab); openModal('storeModal'); });
   $('storeFreeBtn').addEventListener('click', freeCoins);
 
   // ---------- Free coins (rewarded ad, with a cooldown) ----------
@@ -133,7 +247,7 @@ export function createMenus({ adHooks, onLiveryChange }) {
     profile.addCoins(FREE_COINS);
     sfx.built();
     notify(`+${FREE_COINS} ${coin}`);
-    if (!$('storeModal').classList.contains('hidden')) renderStore();
+    if (!$('storeModal').classList.contains('hidden')) ({ liveries: renderStore, upgrades: renderUpgrades, ships: renderShips })[storeTab]();
   }
   $('freeCoinsBtn').addEventListener('click', freeCoins);
   setInterval(() => {
@@ -188,6 +302,7 @@ export function createMenus({ adHooks, onLiveryChange }) {
     $('recordStats').innerHTML = [
       ['Battles fought', s.games],
       ['Victories', s.wins],
+      ['Ranked War wins', `${s.rankedWins} / ${s.rankedGames}`],
       ['Win rate', s.games ? `${Math.round((s.wins / s.games) * 100)}%` : '–'],
       ['Enemy ships sunk', s.sunk],
       ['Ships lost', s.lost],
@@ -208,6 +323,7 @@ export function createMenus({ adHooks, onLiveryChange }) {
     const reward = profile.finishMatch({
       won: winner === 'player',
       difficulty: game.difficulty,
+      rank: game.rankLevel,
       sunk: p.kills,
       lost: p.lost,
       outposts: game.outposts.filter((o) => o.owner === 'player').length,

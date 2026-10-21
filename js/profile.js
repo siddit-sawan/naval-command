@@ -1,3 +1,5 @@
+import { UPGRADES, UNITS, rankedReward } from './config.js';
+
 // The player's saved progress: coins, rank, owned liveries, stats and the daily reward streak.
 // Stored in localStorage; if storage is blocked the profile simply lasts for this session.
 
@@ -23,8 +25,8 @@ const DAILY_STEP = 30;
 const DAILY_MAX_STREAK = 7;
 
 const fresh = () => ({
-  coins: 100, xp: 0, livery: 'dazzle', owned: ['dazzle'], adProgress: {},
-  stats: { games: 0, wins: 0, sunk: 0, lost: 0, outposts: 0, bestTime: 0, coinsEarned: 0 },
+  coins: 100, xp: 0, livery: 'dazzle', owned: ['dazzle'], adProgress: {}, upgrades: {}, ships: [],
+  stats: { games: 0, wins: 0, sunk: 0, lost: 0, outposts: 0, bestTime: 0, coinsEarned: 0, rankedGames: 0, rankedWins: 0 },
   daily: { last: '', streak: 0 },
   tutorials: {}, // modes whose tutorial has been finished or skipped
 });
@@ -84,6 +86,40 @@ export const profile = {
     return data.adProgress[id];
   },
 
+  // ---------- Exclusive ships ----------
+  ownsShip(id) { return data.ships.includes(id); },
+  buyShip(id) {
+    if (this.ownsShip(id) || !this.spend(UNITS[id].shopPrice)) return false;
+    data.ships = [...data.ships, id];
+    save();
+    return true;
+  },
+
+  // ---------- Upgrades ----------
+  upgradeLevel(id) { return data.upgrades[id] || 0; },
+  // Price of the next level, or null when maxed out.
+  upgradeCost(id) { return UPGRADES[id].costs[this.upgradeLevel(id)] ?? null; },
+  buyUpgrade(id) {
+    const cost = this.upgradeCost(id);
+    if (cost === null || !this.spend(cost)) return false;
+    data.upgrades = { ...data.upgrades, [id]: this.upgradeLevel(id) + 1 };
+    save();
+    return true;
+  },
+  // What the owned upgrade levels add up to, in the form the game consumes.
+  upgradeEffects() {
+    const lv = (id) => this.upgradeLevel(id);
+    return {
+      income: 1 + 0.1 * lv('income'),
+      gold: 75 * lv('gold'),
+      ships: UPGRADES.fleet.ships.slice(0, lv('fleet')),
+      build: 1 - 0.08 * lv('yard'),
+      hp: 1 + 0.1 * lv('armor'),
+      cap: 2 * lv('cap'),
+      exclusive: [...data.ships],
+    };
+  },
+
   // ---------- Tutorials ----------
   tutorialSeen(mode) { return !!data.tutorials[mode]; },
   markTutorial(mode, seen = true) {
@@ -113,17 +149,20 @@ export const profile = {
    * result: { won, difficulty, sunk, lost, outposts, seconds }
    */
   finishMatch(result) {
-    const m = DIFF_MULT[result.difficulty] || 1;
+    const ranked = result.difficulty === 'ranked';
+    const m = ranked ? rankedReward(result.rank) : DIFF_MULT[result.difficulty] || 1;
     const lines = [
       ['Service pay', 25],
       ['Enemy ships sunk', result.sunk * 8],
       ['Outposts held', result.outposts * 12],
     ];
     if (result.won) lines.push(['Victory', 120]);
-    if (m !== 1) lines.push([`${result.difficulty[0].toUpperCase()}${result.difficulty.slice(1)} difficulty ×${m}`, null]);
+    if (ranked) lines.push([`Ranked War, enemy level ${result.rank} ×${m}`, null]);
+    else if (m !== 1) lines.push([`${result.difficulty[0].toUpperCase()}${result.difficulty.slice(1)} difficulty ×${m}`, null]);
     const total = Math.round(lines.reduce((s, [, v]) => s + (v || 0), 0) * m);
     const s = data.stats;
     s.games++;
+    if (ranked) { s.rankedGames++; if (result.won) s.rankedWins++; }
     if (result.won) {
       s.wins++;
       if (!s.bestTime || result.seconds < s.bestTime) s.bestTime = Math.round(result.seconds);

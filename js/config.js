@@ -20,6 +20,34 @@ export const UNITS = {
 };
 export const UNIT_ORDER = ['corvette', 'destroyer', 'submarine', 'battleship'];
 
+// Exclusive ships: bought once with coins in the Shop (shopPrice), then buildable in fleet battles, where they
+// cost far more gold than the standard hull they are built on. They use that hull's model (`base`), enlarged by
+// `scale`, and its livery. Only the player can field them.
+export const EXCLUSIVES = {
+  raider: {
+    label: 'Raider', exclusive: true, base: 'corvette', scale: 1.15, shopPrice: 500, blurb: 'Fast gunboat that runs rings around anything.',
+    cost: 140, build: 6, hp: 260, speed: 22, turn: 1.4, size: 16,
+    weapon: 'gun', range: 55, damage: 14, reload: 0.6, detect: 50,
+  },
+  cruiser: {
+    label: 'Cruiser', exclusive: true, base: 'destroyer', scale: 1.3, shopPrice: 800, blurb: 'Armoured, long-ranged and hard-hitting. Also hunts subs.',
+    cost: 230, build: 11, hp: 520, speed: 12, turn: 0.6, size: 31,
+    weapon: 'gun', range: 76, damage: 30, reload: 1.2, detect: 85, subBonus: 2,
+  },
+  phantom: {
+    label: 'Phantom', exclusive: true, base: 'submarine', scale: 1.25, shopPrice: 1200, blurb: 'Silent, quick, and its torpedoes hit like a freight train.',
+    cost: 330, build: 12, hp: 280, speed: 12, turn: 0.7, size: 22,
+    weapon: 'torpedo', range: 82, damage: 120, reload: 3, detect: 45, stealth: true,
+  },
+  dreadnought: {
+    label: 'Dreadnought', exclusive: true, base: 'battleship', scale: 1.35, shopPrice: 2500, blurb: 'The ultimate capital ship. Also launches a scout bomber.',
+    cost: 600, build: 20, hp: 1500, speed: 6.5, turn: 0.35, size: 46,
+    weapon: 'gun', range: 115, damage: 85, reload: 3.2, detect: 55, splash: 14,
+  },
+};
+export const EXCLUSIVE_ORDER = ['raider', 'cruiser', 'phantom', 'dreadnought'];
+Object.assign(UNITS, EXCLUSIVES);
+
 export const HARBOR = { hp: 3000, radius: 40, range: 85, damage: 25, reload: 1.6, detect: 90 };
 
 export const ECONOMY = {
@@ -29,6 +57,18 @@ export const ECONOMY = {
   maxQueue: 5,
   maxShips: 20,
 };
+
+// Permanent upgrades bought with coins in the shop's Upgrades tab. Each level costs the next entry in `costs`;
+// `per` is the bonus gained per level (see profile.upgradeEffects). They only apply to the player in real matches.
+export const UPGRADES = {
+  income: { name: 'Treasury', icon: '⛃', desc: 'Every outpost and harbor pays more gold.', per: '+10% income', costs: [150, 300, 500, 800, 1200] },
+  gold: { name: 'War Chest', icon: '💰', desc: 'Start every match with extra gold.', per: '+75 starting gold', costs: [120, 250, 450, 700] },
+  fleet: { name: 'Reinforcements', icon: '⚓', desc: 'Extra ships sail out with your fleet at the start of a fleet battle.', per: '+1 ship', costs: [200, 400, 700, 1100], ships: ['corvette', 'destroyer', 'submarine', 'battleship'] },
+  yard: { name: 'Shipwrights', icon: '🔧', desc: 'Ships finish building sooner.', per: '-8% build time', costs: [150, 300, 550, 900] },
+  armor: { name: 'Hull Plating', icon: '🛡', desc: 'Every ship you field is tougher.', per: '+10% hull', costs: [200, 400, 700, 1100] },
+  cap: { name: 'Fleet Command', icon: '🚩', desc: 'Raise the maximum size of your fleet.', per: '+2 max ships', costs: [250, 500, 900] },
+};
+export const UPGRADE_ORDER = ['income', 'gold', 'fleet', 'yard', 'armor', 'cap'];
 
 export const CAPTURE = { radius: 40, rate: 0.12 };
 
@@ -55,6 +95,31 @@ export const DIFFICULTY = {
     playerGold: 250, playerIncome: 1, playerBuild: 1, regen: 0.5,
   },
 };
+
+// Ranked War: a fleet battle whose difficulty follows the player's rank (0 = Cadet ... 9 = Fleet Admiral).
+// The settings slide from the 'low' column at the lowest rank to the 'high' column at the top, far beyond Hard:
+// the enemy earns more, builds faster, hits harder and attacks sooner while the player's help is stripped away.
+export const RANKED_TOP = 9;
+const RANKED_LOW = {
+  income: 0.8, build: 1.3, maxShips: 12, firstWave: 150, think: 3, attackArmy: 6, accuracy: 0.78,
+  enemyDamage: 0.9, enemyHarborHp: 2500, playerGold: 350, playerIncome: 1.1, playerBuild: 0.95, regen: 1.5,
+};
+const RANKED_HIGH = {
+  income: 1.7, build: 0.7, maxShips: 24, firstWave: 35, think: 1.2, attackArmy: 4, accuracy: 0.97,
+  enemyDamage: 1.35, enemyHarborHp: 4800, playerGold: 150, playerIncome: 0.9, playerBuild: 1.1, regen: 0,
+};
+const RANKED_WHOLE = new Set(['maxShips', 'attackArmy', 'enemyHarborHp', 'playerGold']);
+export function rankedDifficulty(level) {
+  const t = Math.min(Math.max(level, 0), RANKED_TOP) / RANKED_TOP;
+  const out = {};
+  for (const k of Object.keys(RANKED_LOW)) {
+    const v = RANKED_LOW[k] + (RANKED_HIGH[k] - RANKED_LOW[k]) * t;
+    out[k] = RANKED_WHOLE.has(k) ? Math.round(v) : Math.round(v * 100) / 100;
+  }
+  return out;
+}
+// Coin and XP multiplier for a ranked win or loss: the higher the rank, the bigger the payout.
+export const rankedReward = (level) => Math.round((1.2 + 0.15 * level) * 100) / 100;
 
 // Manual mode: the ship you command has a reinforced hull that takes only this share of incoming damage.
 export const HELM_ARMOR = 0.65;
