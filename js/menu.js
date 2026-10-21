@@ -2,7 +2,7 @@ import { profile, RANKS } from './profile.js';
 import { LIVERIES, STORE_ORDER, drawPreview } from './livery.js';
 import { showAd } from './platform.js';
 import { UPGRADES, UPGRADE_ORDER, UNITS, EXCLUSIVE_ORDER } from './config.js';
-import { sfx } from './audio.js';
+import { sfx } from '../audio/audio.js';
 import { createShowroom } from './showroom.js';
 
 // Everything around the battles: the profile bar, Shop, daily reward, free-coin ads,

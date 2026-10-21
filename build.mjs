@@ -21,6 +21,9 @@ const html = fs.readFileSync('index.html', 'utf8')
   .replace(/\s*<script type="importmap">[\s\S]*?<\/script>/, '')
   .replace('./js/main.js', './game.js');
 fs.writeFileSync('dist/index.html', html);
+fs.copyFileSync('style.css', 'dist/style.css');
+fs.cpSync('fonts', 'dist/fonts', { recursive: true });
+if (fs.existsSync('audio')) fs.cpSync('audio', 'dist/audio', { recursive: true, filter: (p) => !p.endsWith('.js') }); // sound files only; audio.js is bundled
 
 const kb = (n) => `${(n / 1024).toFixed(0)} KB`;
 const size = fs.statSync('dist/game.js').size;

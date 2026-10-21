@@ -3,7 +3,7 @@ import { rankedDifficulty, UNITS, HARBOR, ECONOMY, CAPTURE, MAP, REVEAL_TIME, DI
 import { makeShipModel, makeHarbor, makeOutpost, makeAircraftModel } from './models.js';
 import { ISLANDS, sampleOcean } from './ocean.js';
 import { Effects } from './effects.js';
-import { sfx } from './audio.js';
+import { sfx } from '../audio/audio.js';
 import { EnemyAI, FleetAI } from './ai.js';
 
 export const other = (team) => (team === 'player' ? 'enemy' : 'player');

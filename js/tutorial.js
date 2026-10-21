@@ -1,5 +1,5 @@
 import { profile } from './profile.js';
-import { sfx } from './audio.js';
+import { sfx } from '../audio/audio.js';
 
 // First-time tutorials for Fleet and Manual mode. Each step either waits for Next (or Enter, which
 // works while the mouse is captured in first person) or for the player to actually do the thing, then

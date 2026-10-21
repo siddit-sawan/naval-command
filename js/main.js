@@ -7,7 +7,7 @@ import { Game, warmupMeshes } from './game.js';
 import { createWeather } from './fog.js';
 import { Hud } from './hud.js';
 import { UNITS, UNIT_ORDER, EXCLUSIVE_ORDER, MAP, DEATHMATCH, rankedReward, RANKED_TOP } from './config.js';
-import { sfx, unlock, setMuted, isMuted } from './audio.js';
+import { sfx, unlock, setMuted, isMuted } from '../audio/audio.js';
 import { sdk, showAd, isAdRunning } from './platform.js';
 import { profile } from './profile.js';
 import { createMenus } from './menu.js';
